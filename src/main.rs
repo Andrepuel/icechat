@@ -42,6 +42,7 @@ fn main() {
         _ => Chat::load(&args.path),
     };
 
+    let mut sent_message: Option<Message> = None;
     let changed = match &args.command {
         Subcommand::Init => false,
         Subcommand::SetProfile { name } => {
@@ -55,7 +56,8 @@ fn main() {
         }
         Subcommand::View => view(&mut chat),
         Subcommand::SendMessage { content } => {
-            chat.send_message(content.join(" "));
+            let message = chat.send_message(content.join(" "));
+            sent_message = Some(message);
             true
         }
         Subcommand::Wait => false,
@@ -76,8 +78,8 @@ fn main() {
     });
     println!("Done syncronization");
 
-    if let Subcommand::SendMessage { content: _ } = &args.command {
-        print(&chat, &chat.list_messages().last().unwrap())
+    if sent_message.is_some() {
+        print(&chat, &sent_message.unwrap())
     }
     if let Subcommand::Wait = &args.command {
         if view(&mut chat) {

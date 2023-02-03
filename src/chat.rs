@@ -86,14 +86,16 @@ impl Chat {
         self.database.get_contact(uuid)
     }
 
-    pub fn send_message(&mut self, content: String) {
+    pub fn send_message(&mut self, content: String) -> Message {
         let message = Message {
             from: self.user(),
             content,
             ..Default::default()
         };
 
-        self.database.add_message(message)
+        self.database.add_message(message.clone());
+
+        message
     }
 
     pub fn list_peers(&self) -> impl DoubleEndedIterator<Item = Contact> + '_ {
