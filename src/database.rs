@@ -1,4 +1,8 @@
-use automerge::{transaction::Transactable, Automerge, ObjType, Prop, ReadDoc};
+use automerge::{
+    sync::{self, SyncDoc},
+    transaction::Transactable,
+    Automerge, ObjType, Prop, ReadDoc,
+};
 use autosurgeon::{hydrate, hydrate_prop, reconcile, reconcile_prop, Hydrate, Reconcile};
 use uuid::Uuid;
 
@@ -6,9 +10,9 @@ pub struct SharedDatabase {
     doc: Automerge,
 }
 impl SharedDatabase {
-    pub fn new() -> SharedDatabase {
+    pub fn with_user(user: Uuid) -> SharedDatabase {
         SharedDatabase {
-            doc: schema::create().with_actor(Uuid::new_v4().into()),
+            doc: schema::create().with_actor(user.into()),
         }
     }
 
@@ -64,10 +68,9 @@ impl SharedDatabase {
 
         Self { doc }
     }
-}
-impl Default for SharedDatabase {
-    fn default() -> Self {
-        Self::new()
+
+    pub fn start_sync(&mut self) -> DbSync<'_> {
+        DbSync::new(&mut self.doc)
     }
 }
 
@@ -90,6 +93,55 @@ pub enum MessageStatus {
     Sent,
     Delivered,
     Read,
+}
+
+pub struct DbSync<'a> {
+    doc: &'a mut Automerge,
+    state: sync::State,
+    msg: Option<Vec<u8>>,
+}
+impl<'a> DbSync<'a> {
+    pub fn new(doc: &'a mut Automerge) -> Self {
+        let state = sync::State::new();
+        let mut r = Self {
+            doc,
+            state,
+            msg: Default::default(),
+        };
+        r.poll_send();
+
+        r
+    }
+
+    pub fn message(&self) -> Option<&[u8]> {
+        self.msg.as_deref()
+    }
+
+    pub fn pop_message(&mut self) {
+        self.msg = None;
+        self.poll_send();
+    }
+
+    pub fn receive(&mut self, message: &[u8]) {
+        let message = sync::Message::decode(message).unwrap();
+        self.doc
+            .receive_sync_message(&mut self.state, message)
+            .unwrap();
+        self.poll_send();
+    }
+
+    pub fn done(self) {}
+
+    fn poll_send(&mut self) {
+        if self.msg.is_some() {
+            return;
+        }
+
+        self.msg = self
+            .doc
+            .generate_sync_message(&mut self.state)
+            .map(|message| message.encode());
+    }
 }
 
 pub struct LocalDatabase {
@@ -175,22 +227,77 @@ pub mod tests {
 
     const USER: Uuid = uuid::uuid!("a50ca24b-447e-487f-8f23-e9fbad19a452");
 
+    struct DbEquals(SharedDatabase);
+    impl DbEquals {
+        fn comparer(&self) -> impl Eq + std::fmt::Debug {
+            (
+                self.0.list_messages().collect::<Vec<_>>(),
+                self.0.list_contact().collect::<Vec<_>>(),
+            )
+        }
+    }
+    impl std::fmt::Debug for DbEquals {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Debug::fmt(&self.comparer(), f)
+        }
+    }
+    impl PartialEq for DbEquals {
+        fn eq(&self, other: &Self) -> bool {
+            self.comparer().eq(&other.comparer())
+        }
+    }
+    impl Eq for DbEquals {}
+
     mod given_an_empty_database {
         use super::*;
 
         type Given = (SharedDatabase,);
         #[fixture]
         fn given() -> Given {
-            (SharedDatabase::new(),)
+            (SharedDatabase::with_user(USER),)
         }
 
         #[rstest]
         fn it_is_identical_to_other_empty_database(given: Given) {
             let (mut database, ..) = given;
 
-            let mut other = SharedDatabase::new();
+            let mut other = SharedDatabase::with_user(Uuid::new_v4());
 
             assert_eq!(database.save(), other.save());
+        }
+
+        #[rstest]
+        fn it_is_identical_if_the_user_is_the_same(given: Given) {
+            let (mut database, ..) = given;
+
+            let mut other = SharedDatabase::with_user(USER);
+
+            let same_message = Message {
+                from: Uuid::new_v4(),
+                ..Default::default()
+            };
+
+            database.add_message(same_message.clone());
+            other.add_message(same_message);
+
+            assert_eq!(database.save(), other.save());
+        }
+
+        #[rstest]
+        fn it_is_not_identical_if_the_user_is_not_the_same(given: Given) {
+            let (mut database, ..) = given;
+
+            let mut other = SharedDatabase::with_user(Uuid::new_v4());
+
+            let same_message = Message {
+                from: Uuid::new_v4(),
+                ..Default::default()
+            };
+
+            database.add_message(same_message.clone());
+            other.add_message(same_message);
+
+            assert_ne!(database.save(), other.save());
         }
 
         #[rstest]
@@ -228,19 +335,68 @@ pub mod tests {
             assert_eq!(database.list_messages().collect::<Vec<_>>(), vec![message]);
         }
 
-        #[rstest]
-        fn it_may_be_saved_and_then_load_back(given: Given) {
-            let (mut database, ..) = given;
+        mod and_the_database_is_not_empty {
+            use super::*;
 
-            database.add_message(Default::default());
+            type Given = (SharedDatabase,);
+            #[fixture]
+            fn given() -> Given {
+                let (mut database, ..) = super::given();
 
-            let data = database.save();
-            let back = SharedDatabase::load(&data);
+                database.add_contact(Contact {
+                    uuid: Uuid::new_v4(),
+                    name: "name".to_string(),
+                });
+                database.add_message(Message {
+                    from: Uuid::new_v4(),
+                    content: "Hello".to_string(),
+                    ..Default::default()
+                });
 
-            assert_eq!(
-                database.list_messages().collect::<Vec<_>>(),
-                back.list_messages().collect::<Vec<_>>()
-            );
+                (database,)
+            }
+
+            #[rstest]
+            fn it_may_be_saved_and_then_load_back(given: Given) {
+                let (mut database, ..) = given;
+
+                let data = database.save();
+                let back = SharedDatabase::load(&data);
+
+                assert_eq!(DbEquals(database), DbEquals(back));
+            }
+
+            #[rstest]
+            fn it_syncs_with_another_empty_database(given: Given) {
+                let (mut database, ..) = given;
+
+                let mut other = SharedDatabase::with_user(Uuid::new_v4());
+                other.add_message(Message {
+                    from: Uuid::new_v4(),
+                    ..Default::default()
+                });
+
+                let mut send = database.start_sync();
+                let mut recv = other.start_sync();
+
+                loop {
+                    if let Some(message) = send.message() {
+                        println!("alice -> {message:?}");
+                        recv.receive(message);
+                        send.pop_message();
+                    } else if let Some(message) = recv.message() {
+                        println!("bob -> {message:?}");
+                        send.receive(message);
+                        recv.pop_message();
+                    } else {
+                        send.done();
+                        recv.done();
+                        break;
+                    }
+                }
+
+                assert_eq!(DbEquals(database), DbEquals(other));
+            }
         }
     }
 
