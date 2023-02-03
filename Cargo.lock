@@ -474,6 +474,7 @@ name = "icechat"
 version = "0.1.0"
 dependencies = [
  "automerge",
+ "clap",
  "futures-util",
  "icepipe",
  "rstest",
@@ -483,9 +484,9 @@ dependencies = [
 
 [[package]]
 name = "icepipe"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7829ee8f06b16dd83c2e68848454b8ac91354ffdd6d949c816fe36e42795e97"
+checksum = "cf7d875da08962fff501f1f469f67dd3d8792dd5ad3860cb43d2744e57a3b264"
 dependencies = [
  "anyhow",
  "base64 0.21.0",

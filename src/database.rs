@@ -74,8 +74,8 @@ impl SharedDatabase {
         self.doc.save()
     }
 
-    pub fn load(data: &[u8]) -> Self {
-        let doc = Automerge::load(data).unwrap();
+    pub fn load_with_user(data: &[u8], user: Uuid) -> Self {
+        let doc = Automerge::load(data).unwrap().with_actor(user.into());
 
         Self { doc }
     }
@@ -229,15 +229,12 @@ pub struct LocalDatabase {
     doc: Automerge,
 }
 impl LocalDatabase {
-    pub fn with_user(uuid: Uuid) -> LocalDatabase {
+    pub fn with_user(user: Uuid) -> LocalDatabase {
         let mut doc = Automerge::new().with_actor(Uuid::nil().into());
         let mut trans = doc.transaction();
 
         LocalDatabaseData {
-            user: Contact {
-                uuid,
-                name: Default::default(),
-            },
+            user,
             channels: Default::default(),
         }
         .reconcile(&mut trans, ROOT);
@@ -248,7 +245,17 @@ impl LocalDatabase {
     }
 
     pub fn user(&self) -> Uuid {
-        LocalDatabaseData::hydrate(&self.doc, ROOT).user.uuid
+        LocalDatabaseData::hydrate(&self.doc, ROOT).user
+    }
+
+    pub fn set(&mut self, data: LocalDatabaseData) {
+        let mut trans = self.doc.transaction();
+        data.reconcile(&mut trans, ROOT);
+        trans.commit();
+    }
+
+    pub fn get(&self) -> LocalDatabaseData {
+        LocalDatabaseData::hydrate(&self.doc, ROOT)
     }
 
     pub fn save(&mut self) -> Vec<u8> {
@@ -264,25 +271,28 @@ impl LocalDatabase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDatabaseData {
-    user: Contact,
-    channels: Vec<String>,
+    pub user: Uuid,
+    pub channels: Vec<String>,
 }
 impl LocalDatabaseData {
     pub fn hydrate<D: ReadDoc>(doc: &D, obj: ObjId) -> LocalDatabaseData {
-        let user = doc.get_map(&obj, "user");
-        let user = Contact::hydrate(doc, user);
+        let user = doc.get_bytes(&obj, "user").try_into().unwrap();
 
         let (channels, channels_n) = doc.get_list(&obj, "channels");
         let channels = (0..channels_n)
             .map(|idx| doc.get_string(&channels, idx))
             .collect();
 
-        LocalDatabaseData { user, channels }
+        LocalDatabaseData {
+            user: Uuid::from_bytes(user),
+            channels,
+        }
     }
 
     pub fn reconcile<T: Transactable>(&self, trans: &mut T, obj: ObjId) {
-        let user = trans.put_object(&obj, "user", ObjType::Map).unwrap();
-        self.user.reconcile(trans, user);
+        trans
+            .put(&obj, "user", self.user.as_bytes().to_vec())
+            .unwrap();
         let channels = trans.put_object(&obj, "channels", ObjType::List).unwrap();
         for (idx, str) in self.channels.iter().enumerate() {
             trans.put(&channels, idx, str.to_string()).unwrap();
@@ -380,6 +390,18 @@ pub mod tests {
             other.add_message(same_message);
 
             assert_eq!(database.save(), other.save());
+
+            let mut third = SharedDatabase::load_with_user(&database.save(), USER);
+
+            let same_message = Message {
+                from: Uuid::new_v4(),
+                ..Default::default()
+            };
+
+            database.add_message(same_message.clone());
+            third.add_message(same_message);
+
+            assert_eq!(database.save(), third.save());
         }
 
         #[rstest]
@@ -416,6 +438,14 @@ pub mod tests {
                 database.list_contact().collect::<Vec<_>>(),
                 vec![contact.clone()]
             );
+            assert_eq!(database.get_contact(contact.uuid), Some(contact.clone()));
+
+            let contact = Contact {
+                name: "André".to_string(),
+                ..contact
+            };
+
+            database.add_contact(contact.clone());
             assert_eq!(database.get_contact(contact.uuid), Some(contact));
 
             let contact = Contact {
@@ -467,7 +497,7 @@ pub mod tests {
                 let (mut database, ..) = given;
 
                 let data = database.save();
-                let back = SharedDatabase::load(&data);
+                let back = SharedDatabase::load_with_user(&data, Uuid::new_v4());
 
                 assert_eq!(DbEquals(database), DbEquals(back));
             }
