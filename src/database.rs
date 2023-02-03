@@ -69,8 +69,8 @@ impl SharedDatabase {
         Self { doc }
     }
 
-    pub fn start_sync(&mut self) -> DbSync<'_> {
-        DbSync::new(&mut self.doc)
+    pub fn start_sync(&mut self) -> AutomergeDbSync<'_> {
+        AutomergeDbSync::new(&mut self.doc)
     }
 }
 
@@ -95,12 +95,19 @@ pub enum MessageStatus {
     Read,
 }
 
-pub struct DbSync<'a> {
+pub trait DbSync {
+    fn message(&self) -> Option<&[u8]>;
+    fn pop_message(&mut self);
+    fn receive(&mut self, message: &[u8]);
+    fn done(self);
+}
+
+pub struct AutomergeDbSync<'a> {
     doc: &'a mut Automerge,
     state: sync::State,
     msg: Option<Vec<u8>>,
 }
-impl<'a> DbSync<'a> {
+impl<'a> AutomergeDbSync<'a> {
     pub fn new(doc: &'a mut Automerge) -> Self {
         let state = sync::State::new();
         let mut r = Self {
@@ -113,25 +120,6 @@ impl<'a> DbSync<'a> {
         r
     }
 
-    pub fn message(&self) -> Option<&[u8]> {
-        self.msg.as_deref()
-    }
-
-    pub fn pop_message(&mut self) {
-        self.msg = None;
-        self.poll_send();
-    }
-
-    pub fn receive(&mut self, message: &[u8]) {
-        let message = sync::Message::decode(message).unwrap();
-        self.doc
-            .receive_sync_message(&mut self.state, message)
-            .unwrap();
-        self.poll_send();
-    }
-
-    pub fn done(self) {}
-
     fn poll_send(&mut self) {
         if self.msg.is_some() {
             return;
@@ -142,6 +130,26 @@ impl<'a> DbSync<'a> {
             .generate_sync_message(&mut self.state)
             .map(|message| message.encode());
     }
+}
+impl<'a> DbSync for AutomergeDbSync<'a> {
+    fn message(&self) -> Option<&[u8]> {
+        self.msg.as_deref()
+    }
+
+    fn pop_message(&mut self) {
+        self.msg = None;
+        self.poll_send();
+    }
+
+    fn receive(&mut self, message: &[u8]) {
+        let message = sync::Message::decode(message).unwrap();
+        self.doc
+            .receive_sync_message(&mut self.state, message)
+            .unwrap();
+        self.poll_send();
+    }
+
+    fn done(self) {}
 }
 
 pub struct LocalDatabase {
