@@ -1,9 +1,9 @@
+use crate::doc_ex::ReadDocEx;
 use automerge::{
     sync::{self, SyncDoc},
     transaction::Transactable,
-    Automerge, ObjType, Prop, ReadDoc,
+    Automerge, ObjId, ObjType, ReadDoc, ROOT,
 };
-use autosurgeon::{hydrate, hydrate_prop, reconcile, reconcile_prop, Hydrate, Reconcile};
 use uuid::Uuid;
 
 pub struct SharedDatabase {
@@ -19,44 +19,55 @@ impl SharedDatabase {
     pub fn add_contact(&mut self, contact: Contact) {
         let index = contact.uuid.to_string();
         let mut trans = self.doc.transaction();
-        trans
+        let obj = trans
             .put_object(schema::contacts_id(), &index, ObjType::Map)
             .unwrap();
-        reconcile_prop(&mut trans, schema::contacts_id(), Prop::Map(index), contact).unwrap();
+        contact.reconcile(&mut trans, obj);
         trans.commit().unwrap();
     }
 
     pub fn add_message(&mut self, message: Message) {
-        let index = self.doc.length(schema::messages_id());
         let mut trans = self.doc.transaction();
-        trans
+        let index = trans.length(schema::messages_id());
+        let obj = trans
             .insert_object(schema::messages_id(), index, ObjType::Map)
             .unwrap();
-        reconcile_prop(&mut trans, schema::messages_id(), index, message).unwrap();
+        message.reconcile(&mut trans, obj);
+        trans.commit().unwrap();
+    }
+
+    pub fn set_message(&mut self, index: usize, message: Message) {
+        let mut trans = self.doc.transaction();
+        let obj = trans.get_map(schema::messages_id(), index);
+        message.reconcile(&mut trans, obj);
         trans.commit().unwrap();
     }
 
     pub fn list_messages(&self) -> impl DoubleEndedIterator<Item = Message> + '_ {
         let length = self.doc.length(schema::messages_id());
 
-        (0..length).map(|idx| hydrate_prop(&self.doc, schema::messages_id(), idx).unwrap())
+        (0..length).map(|idx| {
+            let obj = self.doc.get_map(schema::messages_id(), idx);
+            Message::hydrate(&self.doc, obj)
+        })
     }
 
     pub fn list_contact(&self) -> impl DoubleEndedIterator<Item = Contact> + '_ {
-        let length = self.doc.length(schema::contacts_id());
+        let keys = self.doc.keys(schema::contacts_id());
 
-        (0..length).map(|idx| hydrate_prop(&self.doc, schema::contacts_id(), idx).unwrap())
+        keys.map(|idx| {
+            let obj = self.doc.get_map(schema::contacts_id(), idx);
+
+            Contact::hydrate(&self.doc, obj)
+        })
     }
 
     pub fn get_contact(&self, uuid: Uuid) -> Option<Contact> {
-        let prop: Prop = uuid.to_string().into();
+        let obj = self
+            .doc
+            .get_opt_map(schema::contacts_id(), uuid.to_string())?;
 
-        match hydrate_prop(&self.doc, schema::contacts_id(), prop) {
-            Err(autosurgeon::HydrateError::Unexpected(autosurgeon::hydrate::Unexpected::None)) => {
-                None
-            }
-            r => Some(r.unwrap()),
-        }
+        Some(Contact::hydrate(&self.doc, obj))
     }
 
     pub fn save(&mut self) -> Vec<u8> {
@@ -74,25 +85,87 @@ impl SharedDatabase {
     }
 }
 
-#[derive(Debug, Clone, Reconcile, Hydrate, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Contact {
     pub uuid: Uuid,
     pub name: String,
 }
+impl Contact {
+    pub fn hydrate<D: ReadDoc>(doc: &D, obj: ObjId) -> Self {
+        let uuid = doc.get_bytes(&obj, "uuid").try_into().unwrap();
+        let name = doc.get_string(&obj, "name");
 
-#[derive(Default, Debug, Clone, Reconcile, Hydrate, PartialEq, Eq)]
+        Self {
+            uuid: Uuid::from_bytes(uuid),
+            name,
+        }
+    }
+
+    pub fn reconcile<T: Transactable>(&self, trans: &mut T, obj: ObjId) {
+        trans
+            .put(&obj, "uuid", self.uuid.as_bytes().to_vec())
+            .unwrap();
+        trans.put(&obj, "name", self.name.to_string()).unwrap()
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub from: Uuid,
     pub content: String,
     pub status: MessageStatus,
 }
+impl Message {
+    pub fn hydrate<D: ReadDoc>(doc: &D, obj: ObjId) -> Self {
+        let from = doc.get_bytes(&obj, "from").try_into().unwrap();
+        let content = doc.get_string(&obj, "content");
+        let status = doc.get_u64(&obj, "status");
 
-#[derive(Default, Debug, Clone, Reconcile, Hydrate, PartialEq, Eq)]
+        Self {
+            from: Uuid::from_bytes(from),
+            content,
+            status: status.into(),
+        }
+    }
+
+    pub fn reconcile<T: Transactable>(&self, trans: &mut T, obj: ObjId) {
+        trans
+            .put(&obj, "from", self.from.as_bytes().to_vec())
+            .unwrap();
+        trans
+            .put(&obj, "content", self.content.to_string())
+            .unwrap();
+        trans
+            .put(&obj, "status", Into::<u64>::into(self.status))
+            .unwrap();
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageStatus {
     #[default]
     Sent,
     Delivered,
     Read,
+}
+impl From<u64> for MessageStatus {
+    fn from(value: u64) -> Self {
+        match value {
+            0 => MessageStatus::Sent,
+            1 => MessageStatus::Delivered,
+            2 => MessageStatus::Read,
+            _ => panic!(),
+        }
+    }
+}
+impl From<MessageStatus> for u64 {
+    fn from(value: MessageStatus) -> Self {
+        match value {
+            MessageStatus::Sent => 0,
+            MessageStatus::Delivered => 1,
+            MessageStatus::Read => 2,
+        }
+    }
 }
 
 pub trait DbSync {
@@ -159,27 +232,23 @@ impl LocalDatabase {
     pub fn with_user(uuid: Uuid) -> LocalDatabase {
         let mut doc = Automerge::new().with_actor(Uuid::nil().into());
         let mut trans = doc.transaction();
-        reconcile(
-            &mut trans,
-            LocalDatabaseData {
-                user: Contact {
-                    uuid,
-                    name: Default::default(),
-                },
-                channels: Default::default(),
+
+        LocalDatabaseData {
+            user: Contact {
+                uuid,
+                name: Default::default(),
             },
-        )
-        .unwrap();
+            channels: Default::default(),
+        }
+        .reconcile(&mut trans, ROOT);
+
         trans.commit();
 
         LocalDatabase { doc }
     }
 
     pub fn user(&self) -> Uuid {
-        hydrate::<_, LocalDatabaseData>(&self.doc)
-            .unwrap()
-            .user
-            .uuid
+        LocalDatabaseData::hydrate(&self.doc, ROOT).user.uuid
     }
 
     pub fn save(&mut self) -> Vec<u8> {
@@ -193,10 +262,32 @@ impl LocalDatabase {
     }
 }
 
-#[derive(Debug, Clone, Reconcile, Hydrate, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDatabaseData {
     user: Contact,
     channels: Vec<String>,
+}
+impl LocalDatabaseData {
+    pub fn hydrate<D: ReadDoc>(doc: &D, obj: ObjId) -> LocalDatabaseData {
+        let user = doc.get_map(&obj, "user");
+        let user = Contact::hydrate(doc, user);
+
+        let (channels, channels_n) = doc.get_list(&obj, "channels");
+        let channels = (0..channels_n)
+            .map(|idx| doc.get_string(&channels, idx))
+            .collect();
+
+        LocalDatabaseData { user, channels }
+    }
+
+    pub fn reconcile<T: Transactable>(&self, trans: &mut T, obj: ObjId) {
+        let user = trans.put_object(&obj, "user", ObjType::Map).unwrap();
+        self.user.reconcile(trans, user);
+        let channels = trans.put_object(&obj, "channels", ObjType::List).unwrap();
+        for (idx, str) in self.channels.iter().enumerate() {
+            trans.put(&channels, idx, str.to_string()).unwrap();
+        }
+    }
 }
 
 mod schema {
@@ -326,6 +417,13 @@ pub mod tests {
                 vec![contact.clone()]
             );
             assert_eq!(database.get_contact(contact.uuid), Some(contact));
+
+            let contact = Contact {
+                uuid: Uuid::new_v4(),
+                ..Default::default()
+            };
+            database.add_contact(contact);
+            assert_eq!(database.list_contact().count(), 2);
         }
 
         #[rstest]
@@ -404,6 +502,19 @@ pub mod tests {
                 }
 
                 assert_eq!(DbEquals(database), DbEquals(other));
+            }
+
+            #[rstest]
+            fn it_edits_messages(given: Given) {
+                let (mut database, ..) = given;
+
+                let mut message = database.list_messages().next().unwrap();
+                message.status = MessageStatus::Delivered;
+                database.set_message(0, message.clone());
+
+                let message_back = database.list_messages().next().unwrap();
+                assert_eq!(message, message_back);
+                assert_eq!(database.list_messages().count(), 1);
             }
         }
     }
