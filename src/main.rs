@@ -1,7 +1,7 @@
 use clap::Parser;
 use icechat::{
     chat::Chat,
-    database::{Contact, MessageStatus},
+    database::{Contact, Message, MessageStatus},
 };
 use uuid::Uuid;
 
@@ -76,6 +76,9 @@ fn main() {
     });
     println!("Done syncronization");
 
+    if let Subcommand::SendMessage { content: _ } = &args.command {
+        print(&chat, &chat.list_messages().last().unwrap())
+    }
     if let Subcommand::Wait = &args.command {
         if view(&mut chat) {
             chat.save();
@@ -95,11 +98,7 @@ fn view(chat: &mut Chat) -> bool {
             delivered.push(index);
         }
 
-        let from = chat.get_peer(message.from).unwrap_or_default();
-        println!("{name}:", name = from.name);
-        println!("{content}", content = message.content);
-        println!("{status:?}", status = message.status);
-        println!()
+        print(chat, &message)
     }
 
     if delivered.is_empty() {
@@ -111,4 +110,12 @@ fn view(chat: &mut Chat) -> bool {
     }
 
     true
+}
+
+fn print(chat: &Chat, message: &Message) {
+    let from = chat.get_peer(message.from).unwrap_or_default();
+    println!("{name}:", name = from.name);
+    println!("{content}", content = message.content);
+    println!("{status:?}", status = message.status);
+    println!()
 }
