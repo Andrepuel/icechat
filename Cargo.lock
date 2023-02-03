@@ -475,6 +475,7 @@ version = "0.1.0"
 dependencies = [
  "automerge",
  "clap",
+ "env_logger",
  "futures-util",
  "icepipe",
  "rstest",

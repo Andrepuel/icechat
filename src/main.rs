@@ -33,6 +33,8 @@ enum Subcommand {
 }
 
 fn main() {
+    env_logger::init();
+
     let args = Args::parse();
 
     let mut chat = match args.command {
