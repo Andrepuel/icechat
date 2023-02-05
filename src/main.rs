@@ -11,9 +11,6 @@ struct Args {
     /// Path to the database folder
     path: String,
 
-    /// Synchronization channel
-    channel: String,
-
     #[command(subcommand)]
     command: Subcommand,
 }
@@ -25,7 +22,10 @@ enum Subcommand {
     /// Connects to chat and then set profile
     SetProfile { name: String },
     /// Connects to chat
-    Chat,
+    Chat {
+        /// Synchronization channels
+        channels: Vec<String>,
+    },
 }
 
 fn main() {
@@ -41,16 +41,28 @@ async fn async_main() {
 
     let args = Args::parse();
 
-    if let Subcommand::Init = args.command {
-        Chat::init(Uuid::new_v4(), &args.path);
-        return;
+    let channels = match &args.command {
+        Subcommand::Init => {
+            Chat::init(Uuid::new_v4(), &args.path);
+            return;
+        }
+        Subcommand::SetProfile { .. } => {
+            static EMPTY: Vec<String> = vec![];
+            &EMPTY
+        }
+        Subcommand::Chat { channels } => channels,
     };
 
-    println!("Connecting...");
-    let connection = icepipe::connect(&args.channel, Default::default(), Default::default())
-        .await
-        .unwrap();
-    let mut chat = Chat::load(&args.path, connection);
+    let mut connections = vec![];
+    for (idx, channel) in channels.iter().enumerate() {
+        println!("Connecting to channel number {idx}...");
+        let connection = icepipe::connect(channel, Default::default(), Default::default())
+            .await
+            .unwrap();
+        connections.push(connection);
+    }
+
+    let mut chat = Chat::load(&args.path, connections);
 
     match &args.command {
         Subcommand::Init => {
@@ -64,7 +76,7 @@ async fn async_main() {
             };
             chat.set_profile(contact);
         }
-        Subcommand::Chat => {}
+        Subcommand::Chat { .. } => {}
     };
 
     let mut read_messages = view(&mut chat, 0);

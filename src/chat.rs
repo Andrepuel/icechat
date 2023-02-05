@@ -2,10 +2,11 @@ use crate::{
     database::{AutomergeDbSync, Contact, LocalDatabase, Message, MessageStatus, SharedDatabase},
     pipe_sync::{PipeSync, PipeSyncValue},
 };
+use futures_util::{future::select_all, FutureExt};
 use icepipe::crypto_stream::Chacha20Stream;
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    pin::Pin,
 };
 use uuid::Uuid;
 
@@ -13,14 +14,23 @@ pub struct Chat {
     settings: LocalDatabase,
     database: SharedDatabase,
     path: PathBuf,
-    sync: PipeSync<AutomergeDbSync, Chacha20Stream>,
+    sync: Vec<Pin<Box<PipeSync<AutomergeDbSync, Chacha20Stream>>>>,
 }
 impl Chat {
-    pub fn load<P: AsRef<Path>>(path: P, connection: Chacha20Stream) -> Chat {
+    pub fn load<P: AsRef<Path>, I: IntoIterator<Item = Chacha20Stream>>(
+        path: P,
+        connections: I,
+    ) -> Chat {
         let settings = Self::load_settings(&path);
         let database = Self::load_database(&path, settings.user());
-        let sync = database.start_sync();
-        let sync = PipeSync::new(sync, connection);
+        let sync = connections
+            .into_iter()
+            .map(|connection| {
+                let sync = database.start_sync();
+                let sync = PipeSync::new(sync, connection);
+                Box::pin(sync)
+            })
+            .collect();
         let path = path.as_ref().to_owned();
 
         Chat {
@@ -119,22 +129,37 @@ impl Chat {
     }
 
     pub async fn wait(&mut self) -> ChatValue {
-        self.sync.pre_wait(&mut self.database);
-        self.sync.wait().await
+        for sync in self.sync.iter_mut() {
+            sync.pre_wait(&mut self.database);
+        }
+
+        let (value, index, _) = select_all(self.sync.iter_mut().map(|sync| {
+            async move {
+                let r = sync.wait().await;
+
+                r
+            }
+            .boxed_local()
+        }))
+        .await;
+
+        (value, index)
     }
 
-    pub async fn then(&mut self, value: ChatValue) {
-        self.sync.then(value).await;
+    pub async fn then(&mut self, (value, index): ChatValue) {
+        self.sync[index].then(value).await;
         self.save();
     }
 
     pub fn connected(&self) -> bool {
-        !self.sync.rx_closed()
+        self.sync.iter().any(|sync| !sync.rx_closed())
     }
 
-    pub async fn close(mut self) {
-        self.sync.close().await
+    pub async fn close(self) {
+        for mut sync in self.sync {
+            sync.close().await
+        }
     }
 }
 
-type ChatValue = PipeSyncValue;
+type ChatValue = (PipeSyncValue, usize);
