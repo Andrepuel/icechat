@@ -1,5 +1,6 @@
 use crate::{
     database::{AutomergeDbSync, Contact, LocalDatabase, Message, MessageStatus, SharedDatabase},
+    fragmentable::Fragmentable,
     pipe_sync::{PipeSync, PipeSyncValue},
 };
 use futures_util::{future::select_all, FutureExt};
@@ -14,7 +15,7 @@ pub struct Chat {
     settings: LocalDatabase,
     database: SharedDatabase,
     path: PathBuf,
-    sync: Vec<Pin<Box<PipeSync<AutomergeDbSync, Chacha20Stream>>>>,
+    sync: Vec<Pin<Box<ChatSync>>>,
 }
 impl Chat {
     pub fn load<P: AsRef<Path>, I: IntoIterator<Item = Chacha20Stream>>(
@@ -26,6 +27,7 @@ impl Chat {
         let sync = connections
             .into_iter()
             .map(|connection| {
+                let connection = Fragmentable::new(connection);
                 let sync = database.start_sync();
                 let sync = PipeSync::new(sync, connection);
                 Box::pin(sync)
@@ -162,4 +164,5 @@ impl Chat {
     }
 }
 
-type ChatValue = (PipeSyncValue, usize);
+pub type ChatValue = (PipeSyncValue, usize);
+type ChatSync = PipeSync<AutomergeDbSync, Fragmentable<Chacha20Stream>>;

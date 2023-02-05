@@ -474,6 +474,7 @@ name = "icechat"
 version = "0.1.0"
 dependencies = [
  "automerge",
+ "byteorder",
  "clap",
  "env_logger",
  "futures-util",
