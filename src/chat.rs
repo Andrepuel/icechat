@@ -2,7 +2,10 @@ use crate::{
     database::{Contact, LocalDatabase, Message, MessageStatus, SharedDatabase},
     pipe_sync::PipeSync,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use uuid::Uuid;
 
 pub struct Chat {
@@ -121,7 +124,18 @@ impl Chat {
         let pipe = icepipe::connect(channel, Default::default(), Default::default())
             .await
             .unwrap();
-        let pipe_sync = PipeSync::new(sync, pipe);
-        pipe_sync.run().await;
+        let mut pipe_sync = PipeSync::new(sync, pipe);
+
+        loop {
+            pipe_sync.pre_wait(&mut self.database);
+            tokio::select! {
+                value = pipe_sync.wait() => {
+                    pipe_sync.then(value).await;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(1000)) => {
+                    break;
+                }
+            }
+        }
     }
 }

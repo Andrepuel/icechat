@@ -1,120 +1,143 @@
 use crate::database::DbSync;
 use icepipe::pipe_stream::PipeStream;
+use std::any::Any;
 
 pub struct PipeSync<S: DbSync, P: PipeStream> {
     sync: S,
     pipe: P,
+    pending: Option<PipeSyncPending>,
 }
 impl<S: DbSync, P: PipeStream> PipeSync<S, P> {
     pub fn new(sync: S, pipe: P) -> Self {
-        Self { sync, pipe }
+        Self {
+            sync,
+            pipe,
+            pending: None,
+        }
     }
 
-    pub async fn run(mut self) {
-        let mut tx_closed: bool = false;
-        while !tx_closed && !self.pipe.rx_closed() {
-            let send = self.sync.message();
-            let sent = send.is_some();
-
-            if let Some(message) = send {
-                self.pipe.send(message).await.unwrap();
-                self.sync.pop_message();
-            } else {
-                self.pipe.send(&[]).await.unwrap();
+    pub fn pre_wait(&mut self, database: &mut S::Database) {
+        match &mut self.pending {
+            Some(PipeSyncPending::Rx(message)) => {
+                let message = std::mem::take(message);
+                self.sync.rx(database, &message);
+                self.pending = None;
+                self.pre_wait(database)
             }
-
-            let received;
-            if !self.pipe.rx_closed() {
-                let mut wait = self.pipe.wait_dyn().await.unwrap();
-                let message = self
-                    .pipe
-                    .then_dyn(&mut wait)
-                    .await
-                    .unwrap()
-                    .unwrap_or_default();
-
-                if !message.is_empty() {
-                    self.sync.receive(&message);
-                    received = true;
-                } else {
-                    received = false;
+            Some(PipeSyncPending::Tx(_)) => {}
+            None => {
+                if let Some(message) = self.sync.tx(database) {
+                    self.pending = Some(PipeSyncPending::Tx(message));
                 }
-            } else {
-                received = false;
-            }
-
-            if !sent && !received {
-                self.pipe.close().await.unwrap();
-                tx_closed = true;
             }
         }
     }
+
+    pub async fn wait(&mut self) -> PipeSyncValue {
+        match self.pending.take() {
+            Some(PipeSyncPending::Rx(_)) => {
+                unreachable!()
+            }
+            Some(PipeSyncPending::Tx(message)) => PipeSyncValue::Tx(message),
+            None => PipeSyncValue::Rx(self.pipe.wait_dyn().await.unwrap()),
+        }
+    }
+
+    pub async fn then(&mut self, value: PipeSyncValue) {
+        assert!(self.pending.is_none());
+        match value {
+            PipeSyncValue::Rx(mut value) => {
+                if let Some(message) = self.pipe.then_dyn(&mut value).await.unwrap() {
+                    self.pending = Some(PipeSyncPending::Rx(message));
+                }
+            }
+            PipeSyncValue::Tx(message) => {
+                self.pipe.send(&message).await.unwrap();
+            }
+        }
+    }
+}
+
+pub enum PipeSyncPending {
+    Rx(Vec<u8>),
+    Tx(Vec<u8>),
+}
+
+pub enum PipeSyncValue {
+    Tx(Vec<u8>),
+    Rx(Box<dyn Any>),
 }
 
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::{channel_pipe::ChannelPipe, database::DbSync};
-    use futures_util::future::join_all;
+    use std::time::Duration;
 
-    struct CountSync<'a> {
-        data: &'a mut Vec<i32>,
+    struct CountSync {
         pos: usize,
         end: usize,
         wait: bool,
-        buffer: u8,
     }
-    impl<'a> CountSync<'a> {
-        pub fn new(data: &'a mut Vec<i32>, sender: bool) -> Self {
+    impl CountSync {
+        pub fn new(data: &Vec<i32>, sender: bool) -> Self {
             let end = data.len();
-            let buffer = data.first().copied().unwrap_or(0) as u8;
 
             CountSync {
-                data,
                 pos: 0,
                 end,
                 wait: !sender,
-                buffer,
             }
         }
     }
-    impl<'a> DbSync for CountSync<'a> {
-        fn message(&self) -> Option<&[u8]> {
+    impl DbSync for CountSync {
+        type Database = Vec<i32>;
+
+        fn tx(&mut self, database: &mut Self::Database) -> Option<Vec<u8>> {
             if self.wait || self.pos >= self.end {
                 return None;
             }
-
-            Some(std::slice::from_ref(&self.buffer))
-        }
-
-        fn pop_message(&mut self) {
-            self.pos += 1;
             self.wait = true;
+            let pos = self.pos;
+            self.pos += 1;
+
+            Some(vec![database[pos] as u8])
         }
 
-        fn receive(&mut self, message: &[u8]) {
+        fn rx(&mut self, database: &mut Self::Database, message: &[u8]) {
             assert_eq!(message.len(), 1);
             self.wait = false;
-            self.buffer = self.data.get(self.pos).copied().unwrap_or_default() as u8;
-            self.data.push(message[0] as i32);
+            database.push(message[0] as i32);
         }
-
-        fn done(self) {}
     }
 
     #[tokio::test]
     async fn sync_test() {
         let mut alice = vec![0, 2, 4];
         let mut bob = vec![1, 3, 5];
-        let sync_a = CountSync::new(&mut alice, true);
-        let sync_b = CountSync::new(&mut bob, true);
+        let sync_a = CountSync::new(&alice, true);
+        let sync_b = CountSync::new(&bob, false);
 
         let (pipe_a, pipe_b) = ChannelPipe::channel();
 
-        let sync_a = PipeSync::new(sync_a, pipe_a);
-        let sync_b = PipeSync::new(sync_b, pipe_b);
+        let mut sync_a = PipeSync::new(sync_a, pipe_a);
+        let mut sync_b = PipeSync::new(sync_b, pipe_b);
 
-        join_all([sync_a.run(), sync_b.run()]).await;
+        loop {
+            sync_a.pre_wait(&mut alice);
+            sync_b.pre_wait(&mut bob);
+            tokio::select! {
+                value = sync_a.wait() => {
+                    sync_a.then(value).await;
+                }
+                value = sync_b.wait() => {
+                    sync_b.then(value).await;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                    break;
+                }
+            }
+        }
 
         assert_eq!(alice, [0, 2, 4, 1, 3, 5]);
         assert_eq!(bob, [1, 3, 5, 0, 2, 4]);

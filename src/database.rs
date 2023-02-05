@@ -80,8 +80,8 @@ impl SharedDatabase {
         Self { doc }
     }
 
-    pub fn start_sync(&mut self) -> AutomergeDbSync<'_> {
-        AutomergeDbSync::new(&mut self.doc)
+    pub fn start_sync(&self) -> AutomergeDbSync {
+        AutomergeDbSync::new()
     }
 }
 
@@ -169,60 +169,36 @@ impl From<MessageStatus> for u64 {
 }
 
 pub trait DbSync {
-    fn message(&self) -> Option<&[u8]>;
-    fn pop_message(&mut self);
-    fn receive(&mut self, message: &[u8]);
-    fn done(self);
+    type Database;
+
+    fn tx(&mut self, database: &mut Self::Database) -> Option<Vec<u8>>;
+    fn rx(&mut self, database: &mut Self::Database, message: &[u8]);
 }
 
-pub struct AutomergeDbSync<'a> {
-    doc: &'a mut Automerge,
+#[derive(Default)]
+pub struct AutomergeDbSync {
     state: sync::State,
-    msg: Option<Vec<u8>>,
 }
-impl<'a> AutomergeDbSync<'a> {
-    pub fn new(doc: &'a mut Automerge) -> Self {
-        let state = sync::State::new();
-        let mut r = Self {
-            doc,
-            state,
-            msg: Default::default(),
-        };
-        r.poll_send();
-
-        r
-    }
-
-    fn poll_send(&mut self) {
-        if self.msg.is_some() {
-            return;
-        }
-
-        self.msg = self
-            .doc
-            .generate_sync_message(&mut self.state)
-            .map(|message| message.encode());
+impl AutomergeDbSync {
+    pub fn new() -> Self {
+        Default::default()
     }
 }
-impl<'a> DbSync for AutomergeDbSync<'a> {
-    fn message(&self) -> Option<&[u8]> {
-        self.msg.as_deref()
+impl DbSync for AutomergeDbSync {
+    type Database = SharedDatabase;
+
+    fn tx(&mut self, database: &mut Self::Database) -> Option<Vec<u8>> {
+        let message = database.doc.generate_sync_message(&mut self.state)?;
+        Some(message.encode())
     }
 
-    fn pop_message(&mut self) {
-        self.msg = None;
-        self.poll_send();
-    }
-
-    fn receive(&mut self, message: &[u8]) {
+    fn rx(&mut self, database: &mut Self::Database, message: &[u8]) {
         let message = sync::Message::decode(message).unwrap();
-        self.doc
+        database
+            .doc
             .receive_sync_message(&mut self.state, message)
             .unwrap();
-        self.poll_send();
     }
-
-    fn done(self) {}
 }
 
 pub struct LocalDatabase {
@@ -512,21 +488,15 @@ pub mod tests {
                     ..Default::default()
                 });
 
-                let mut send = database.start_sync();
-                let mut recv = other.start_sync();
+                let mut database_sync = database.start_sync();
+                let mut other_sync = other.start_sync();
 
                 loop {
-                    if let Some(message) = send.message() {
-                        println!("alice -> {message:?}");
-                        recv.receive(message);
-                        send.pop_message();
-                    } else if let Some(message) = recv.message() {
-                        println!("bob -> {message:?}");
-                        send.receive(message);
-                        recv.pop_message();
+                    if let Some(message) = database_sync.tx(&mut database) {
+                        other_sync.rx(&mut other, &message);
+                    } else if let Some(message) = other_sync.tx(&mut other) {
+                        database_sync.rx(&mut database, &message);
                     } else {
-                        send.done();
-                        recv.done();
                         break;
                     }
                 }
