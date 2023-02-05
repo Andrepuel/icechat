@@ -56,6 +56,14 @@ impl<S: DbSync, P: PipeStream> PipeSync<S, P> {
             }
         }
     }
+
+    pub fn rx_closed(&self) -> bool {
+        self.pipe.rx_closed()
+    }
+
+    pub async fn close(&mut self) {
+        self.pipe.close().await.unwrap();
+    }
 }
 
 pub enum PipeSyncPending {

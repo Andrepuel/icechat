@@ -1,7 +1,8 @@
 use crate::{
-    database::{Contact, LocalDatabase, Message, MessageStatus, SharedDatabase},
-    pipe_sync::PipeSync,
+    database::{AutomergeDbSync, Contact, LocalDatabase, Message, MessageStatus, SharedDatabase},
+    pipe_sync::{PipeSync, PipeSyncValue},
 };
+use icepipe::crypto_stream::Chacha20Stream;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -12,17 +13,21 @@ pub struct Chat {
     settings: LocalDatabase,
     database: SharedDatabase,
     path: PathBuf,
+    sync: PipeSync<AutomergeDbSync, Chacha20Stream>,
 }
 impl Chat {
-    pub fn load<P: AsRef<Path>>(path: P) -> Chat {
+    pub fn load<P: AsRef<Path>>(path: P, connection: Chacha20Stream) -> Chat {
         let settings = Self::load_settings(&path);
         let database = Self::load_database(&path, settings.user());
+        let sync = database.start_sync();
+        let sync = PipeSync::new(sync, connection);
         let path = path.as_ref().to_owned();
 
         Chat {
             settings,
             database,
             path,
+            sync,
         }
     }
 
@@ -42,31 +47,25 @@ impl Chat {
         SharedDatabase::load_with_user(&std::fs::read(Self::database_path(path)).unwrap(), user)
     }
 
-    pub fn init<P: AsRef<Path>>(user: Uuid, path: P) -> Chat {
-        let settings = LocalDatabase::with_user(user);
+    pub fn init<P: AsRef<Path>>(user: Uuid, path: P) {
+        let mut settings = LocalDatabase::with_user(user);
         let mut database = SharedDatabase::with_user(user);
         database.add_contact(Contact {
             uuid: user,
             name: user.to_string(),
         });
 
-        let mut r = Chat {
-            settings,
-            database,
-            path: path.as_ref().into(),
-        };
-        r.save();
-        r
+        Self::save_with(&mut settings, &mut database, path.as_ref());
     }
 
     pub fn save(&mut self) {
-        std::fs::create_dir_all(&self.path).unwrap();
-        std::fs::write(Self::settings_path(&self.path), self.settings.save()).unwrap();
-        std::fs::write(Self::database_path(&self.path), self.database.save()).unwrap();
+        Self::save_with(&mut self.settings, &mut self.database, &self.path)
     }
 
-    pub fn reload(&mut self) {
-        *self = Self::load(&self.path)
+    fn save_with(settings: &mut LocalDatabase, database: &mut SharedDatabase, path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(Self::settings_path(path), settings.save()).unwrap();
+        std::fs::write(Self::database_path(path), database.save()).unwrap();
     }
 
     pub fn user(&self) -> Uuid {
@@ -119,23 +118,23 @@ impl Chat {
         self.database.set_message(index, message);
     }
 
-    pub async fn synchronize_with(&mut self, channel: &str) {
-        let sync = self.database.start_sync();
-        let pipe = icepipe::connect(channel, Default::default(), Default::default())
-            .await
-            .unwrap();
-        let mut pipe_sync = PipeSync::new(sync, pipe);
+    pub async fn wait(&mut self) -> ChatValue {
+        self.sync.pre_wait(&mut self.database);
+        self.sync.wait().await
+    }
 
-        loop {
-            pipe_sync.pre_wait(&mut self.database);
-            tokio::select! {
-                value = pipe_sync.wait() => {
-                    pipe_sync.then(value).await;
-                }
-                _ = tokio::time::sleep(Duration::from_millis(1000)) => {
-                    break;
-                }
-            }
-        }
+    pub async fn then(&mut self, value: ChatValue) {
+        self.sync.then(value).await;
+        self.save();
+    }
+
+    pub fn connected(&self) -> bool {
+        !self.sync.rx_closed()
+    }
+
+    pub async fn close(mut self) {
+        self.sync.close().await
     }
 }
+
+type ChatValue = PipeSyncValue;
