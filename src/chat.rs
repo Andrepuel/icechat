@@ -47,7 +47,7 @@ impl Chat {
     }
 
     fn load_settings<P: AsRef<Path>>(path: P) -> LocalDatabase {
-        LocalDatabase::load(&std::fs::read(Self::settings_path(path)).unwrap())
+        LocalDatabase::load(&std::fs::read(Self::settings_path(path)).unwrap()).unwrap()
     }
 
     fn database_path<P: AsRef<Path>>(path: P) -> PathBuf {
@@ -56,15 +56,18 @@ impl Chat {
 
     fn load_database<P: AsRef<Path>>(path: P, user: Uuid) -> SharedDatabase {
         SharedDatabase::load_with_user(&std::fs::read(Self::database_path(path)).unwrap(), user)
+            .unwrap()
     }
 
     pub fn init<P: AsRef<Path>>(user: Uuid, path: P) {
-        let mut settings = LocalDatabase::with_user(user);
-        let mut database = SharedDatabase::with_user(user);
-        database.add_contact(Contact {
-            uuid: user,
-            name: user.to_string(),
-        });
+        let mut settings = LocalDatabase::with_user(user).unwrap();
+        let mut database = SharedDatabase::with_user(user).unwrap();
+        database
+            .add_contact(Contact {
+                uuid: user,
+                name: user.to_string(),
+            })
+            .unwrap();
 
         Self::save_with(&mut settings, &mut database, path.as_ref());
     }
@@ -92,11 +95,11 @@ impl Chat {
 
     pub fn set_profile(&mut self, contact: Contact) {
         assert_eq!(contact.uuid, self.user());
-        self.database.add_contact(contact)
+        self.database.add_contact(contact).unwrap()
     }
 
     pub fn get_peer(&self, uuid: Uuid) -> Option<Contact> {
-        self.database.get_contact(uuid)
+        self.database.get_contact(uuid).unwrap()
     }
 
     pub fn send_message(&mut self, content: String) -> Message {
@@ -106,7 +109,7 @@ impl Chat {
             ..Default::default()
         };
 
-        self.database.add_message(message.clone());
+        self.database.add_message(message.clone()).unwrap();
 
         message
     }
@@ -114,29 +117,30 @@ impl Chat {
     pub fn list_peers(&self) -> impl DoubleEndedIterator<Item = Contact> + '_ {
         self.database
             .list_contact()
+            .map(Result::unwrap)
             .filter(|contact| contact.uuid != self.user())
     }
 
     pub fn list_messages(&self) -> impl DoubleEndedIterator<Item = Message> + '_ {
-        self.database.list_messages()
+        self.database.list_messages().map(Result::unwrap)
     }
 
     pub fn set_message_status(&mut self, index: usize, status: MessageStatus) {
-        let message = self.database.list_messages().nth(index).unwrap();
+        let message = self.database.list_messages().nth(index).unwrap().unwrap();
 
         let message = Message { status, ..message };
 
-        self.database.set_message(index, message);
+        self.database.set_message(index, message).unwrap();
     }
 
     pub async fn wait(&mut self) -> ChatValue {
         for sync in self.sync.iter_mut() {
-            sync.pre_wait(&mut self.database);
+            sync.pre_wait(&mut self.database).unwrap();
         }
 
         let (value, index, _) = select_all(self.sync.iter_mut().map(|sync| {
             async move {
-                let r = sync.wait().await;
+                let r = sync.wait().await.unwrap();
 
                 r
             }
@@ -148,7 +152,7 @@ impl Chat {
     }
 
     pub async fn then(&mut self, (value, index): ChatValue) {
-        self.sync[index].then(value).await;
+        self.sync[index].then(value).await.unwrap();
         self.save();
     }
 
@@ -158,7 +162,7 @@ impl Chat {
 
     pub async fn close(self) {
         for mut sync in self.sync {
-            sync.close().await
+            sync.close().await.unwrap()
         }
     }
 }

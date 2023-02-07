@@ -1,5 +1,6 @@
-use crate::database::DbSync;
+use crate::database::{error::DatabaseError, DbSync};
 use icepipe::pipe_stream::{PipeStream, StreamError};
+use std::io;
 
 pub struct PipeSync<S: DbSync, P>
 where
@@ -23,53 +24,60 @@ where
         }
     }
 
-    pub fn pre_wait(&mut self, database: &mut S::Database) {
+    pub fn pre_wait(&mut self, database: &mut S::Database) -> PipeSyncResult<()> {
         match &mut self.pending {
             Some(PipeSyncPending::Rx(message)) => {
                 let message = std::mem::take(message);
-                self.sync.rx(database, &message);
+                self.sync.rx(database, &message)?;
                 self.pending = None;
-                self.pre_wait(database)
+                self.pre_wait(database)?;
             }
             Some(PipeSyncPending::Tx(_)) => {}
             None => {
-                if let Some(message) = self.sync.tx(database) {
+                if let Some(message) = self.sync.tx(database)? {
                     self.pending = Some(PipeSyncPending::Tx(message));
                 }
             }
         }
+
+        Ok(())
     }
 
-    pub async fn wait(&mut self) -> PipeSyncValue<P> {
+    pub async fn wait(&mut self) -> PipeSyncResult<PipeSyncValue<P>> {
         match self.pending.take() {
             Some(PipeSyncPending::Rx(_)) => {
                 unreachable!()
             }
-            Some(PipeSyncPending::Tx(message)) => PipeSyncValue::Tx(message),
-            None => PipeSyncValue::Rx(self.pipe.wait().await.unwrap()),
+            Some(PipeSyncPending::Tx(message)) => Ok(PipeSyncValue::Tx(message)),
+            None => Ok(PipeSyncValue::Rx(
+                self.pipe.wait().await.map_err(Into::into)?,
+            )),
         }
     }
 
-    pub async fn then(&mut self, value: PipeSyncValue<P>) {
+    pub async fn then(&mut self, value: PipeSyncValue<P>) -> PipeSyncResult<()> {
         assert!(self.pending.is_none());
         match value {
             PipeSyncValue::Rx(mut value) => {
-                if let Some(message) = self.pipe.then(&mut value).await.unwrap() {
+                if let Some(message) = self.pipe.then(&mut value).await.map_err(Into::into)? {
                     self.pending = Some(PipeSyncPending::Rx(message));
                 }
             }
             PipeSyncValue::Tx(message) => {
-                self.pipe.send(&message).await.unwrap();
+                self.pipe.send(&message).await.map_err(Into::into)?;
             }
         }
+
+        Ok(())
     }
 
     pub fn rx_closed(&self) -> bool {
         self.pipe.rx_closed()
     }
 
-    pub async fn close(&mut self) {
-        self.pipe.close().await.unwrap();
+    pub async fn close(&mut self) -> PipeSyncResult<()> {
+        self.pipe.close().await.map_err(Into::into)?;
+        Ok(())
     }
 }
 
@@ -87,10 +95,32 @@ where
     Rx(P::Value),
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum PipeSyncError {
+    #[error(transparent)]
+    IoError(#[from] io::Error),
+    #[error(transparent)]
+    DatabaseError(#[from] DatabaseError),
+    #[error(transparent)]
+    StreamError(StreamError),
+}
+impl From<StreamError> for PipeSyncError {
+    fn from(value: StreamError) -> Self {
+        match value {
+            StreamError::Io(e) => e.into(),
+            e => Self::StreamError(e),
+        }
+    }
+}
+pub type PipeSyncResult<T> = Result<T, PipeSyncError>;
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::{channel_pipe::ChannelPipe, database::DbSync};
+    use crate::{
+        channel_pipe::ChannelPipe,
+        database::{error::DatabaseResult, DbSync},
+    };
     use std::time::Duration;
 
     struct CountSync {
@@ -112,26 +142,28 @@ pub mod tests {
     impl DbSync for CountSync {
         type Database = Vec<i32>;
 
-        fn tx(&mut self, database: &mut Self::Database) -> Option<Vec<u8>> {
+        fn tx(&mut self, database: &mut Self::Database) -> DatabaseResult<Option<Vec<u8>>> {
             if self.wait || self.pos >= self.end {
-                return None;
+                return Ok(None);
             }
             self.wait = true;
             let pos = self.pos;
             self.pos += 1;
 
-            Some(vec![database[pos] as u8])
+            Ok(Some(vec![database[pos] as u8]))
         }
 
-        fn rx(&mut self, database: &mut Self::Database, message: &[u8]) {
+        fn rx(&mut self, database: &mut Self::Database, message: &[u8]) -> DatabaseResult<()> {
             assert_eq!(message.len(), 1);
             self.wait = false;
             database.push(message[0] as i32);
+
+            Ok(())
         }
     }
 
     #[tokio::test]
-    async fn sync_test() {
+    async fn sync_test() -> PipeSyncResult<()> {
         let mut alice = vec![0, 2, 4];
         let mut bob = vec![1, 3, 5];
         let sync_a = CountSync::new(&alice, true);
@@ -143,14 +175,14 @@ pub mod tests {
         let mut sync_b = PipeSync::new(sync_b, pipe_b);
 
         loop {
-            sync_a.pre_wait(&mut alice);
-            sync_b.pre_wait(&mut bob);
+            sync_a.pre_wait(&mut alice)?;
+            sync_b.pre_wait(&mut bob)?;
             tokio::select! {
                 value = sync_a.wait() => {
-                    sync_a.then(value).await;
+                    sync_a.then(value?).await?;
                 }
                 value = sync_b.wait() => {
-                    sync_b.then(value).await;
+                    sync_b.then(value?).await?;
                 }
                 _ = tokio::time::sleep(Duration::from_millis(10)) => {
                     break;
@@ -160,5 +192,7 @@ pub mod tests {
 
         assert_eq!(alice, [0, 2, 4, 1, 3, 5]);
         assert_eq!(bob, [1, 3, 5, 0, 2, 4]);
+
+        Ok(())
     }
 }
