@@ -53,16 +53,9 @@ async fn async_main() {
         Subcommand::Chat { channels } => channels,
     };
 
-    let mut connections = vec![];
-    for (idx, channel) in channels.iter().enumerate() {
-        println!("Connecting to channel number {idx}...");
-        let connection = icepipe::connect(channel, Default::default(), Default::default())
-            .await
-            .unwrap();
-        connections.push(connection);
-    }
+    let channels = channels.iter().cloned();
 
-    let mut chat = Chat::load(&args.path, connections);
+    let mut chat = Chat::load(&args.path, channels);
 
     match &args.command {
         Subcommand::Init => {
@@ -85,7 +78,7 @@ async fn async_main() {
     let stdin = tokio::io::stdin();
     let mut stdin = tokio::io::BufReader::new(stdin);
 
-    while chat.connected() {
+    loop {
         let mut buf = Default::default();
         tokio::select! {
             r = stdin.read_line(&mut buf) => {
@@ -96,7 +89,11 @@ async fn async_main() {
                 chat.send_message(buf);
             }
             value = chat.wait() => {
-                chat.then(value).await;
+                let changed_channel = chat.then(value).await;
+
+                if let Some((new_state, index)) = changed_channel {
+                    println!("Channel {index}: {new_state:?}");
+                }
             }
         }
         read_messages = view(&mut chat, read_messages);

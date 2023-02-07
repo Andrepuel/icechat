@@ -1,37 +1,22 @@
 use crate::{
+    channel::{Channel, ChannelStateLabel, ChannelValue},
     database::{AutomergeDbSync, Contact, LocalDatabase, Message, MessageStatus, SharedDatabase},
-    fragmentable::Fragmentable,
-    pipe_sync::{PipeSync, PipeSyncValue},
 };
 use futures_util::{future::select_all, FutureExt};
-use std::{
-    path::{Path, PathBuf},
-    pin::Pin,
-};
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 pub struct Chat {
     settings: LocalDatabase,
     database: SharedDatabase,
     path: PathBuf,
-    sync: Vec<Pin<Box<ChatSync>>>,
+    sync: Vec<ChatChannel>,
 }
 impl Chat {
-    pub fn load<P: AsRef<Path>, I: IntoIterator<Item = icepipe::connect::Connection>>(
-        path: P,
-        connections: I,
-    ) -> Chat {
+    pub fn load<P: AsRef<Path>, I: IntoIterator<Item = String>>(path: P, connections: I) -> Chat {
         let settings = Self::load_settings(&path);
         let database = Self::load_database(&path, settings.user());
-        let sync = connections
-            .into_iter()
-            .map(|connection| {
-                let connection = Fragmentable::new(connection);
-                let sync = database.start_sync();
-                let sync = PipeSync::new(sync, connection);
-                Box::pin(sync)
-            })
-            .collect();
+        let sync = connections.into_iter().map(Channel::new).collect();
         let path = path.as_ref().to_owned();
 
         Chat {
@@ -134,39 +119,54 @@ impl Chat {
     }
 
     pub async fn wait(&mut self) -> ChatValue {
-        for sync in self.sync.iter_mut() {
-            sync.pre_wait(&mut self.database).unwrap();
-        }
+        let pre_state = self
+            .sync
+            .iter_mut()
+            .map(|sync| {
+                let pre_state = sync.state();
+                if sync.state() == ChannelStateLabel::Offline {
+                    sync.connect(self.database.start_sync());
+                }
+                sync.pre_wait(&mut self.database);
+                pre_state
+            })
+            .collect::<Vec<_>>();
 
-        let (value, index, _) = select_all(self.sync.iter_mut().map(|sync| {
-            async move {
-                let r = sync.wait().await.unwrap();
+        let (value, index, _) =
+            select_all(self.sync.iter_mut().map(|sync| sync.wait().boxed_local())).await;
 
-                r
-            }
-            .boxed_local()
-        }))
-        .await;
+        let pre_state = pre_state[index];
 
-        (value, index)
+        (value, pre_state, index)
     }
 
-    pub async fn then(&mut self, (value, index): ChatValue) {
-        self.sync[index].then(value).await.unwrap();
+    pub async fn then(
+        &mut self,
+        (value, old_state, index): ChatValue,
+    ) -> Option<(ChannelStateLabel, usize)> {
+        self.sync[index].then(value).await;
+        let new_state = self.sync[index].state();
         self.save();
+
+        if new_state != old_state {
+            Some((new_state, index))
+        } else {
+            None
+        }
     }
 
     pub fn connected(&self) -> bool {
-        self.sync.iter().any(|sync| !sync.rx_closed())
+        self.sync
+            .iter()
+            .any(|sync| sync.state() == ChannelStateLabel::Connected)
     }
 
     pub async fn close(self) {
         for mut sync in self.sync {
-            sync.close().await.unwrap()
+            sync.close().await
         }
     }
 }
 
-pub type ChatValue = (PipeSyncValue<ChatSyncStream>, usize);
-type ChatSyncStream = Fragmentable<icepipe::connect::Connection>;
-type ChatSync = PipeSync<AutomergeDbSync, ChatSyncStream>;
+pub type ChatValue = (ChannelValue, ChannelStateLabel, usize);
+type ChatChannel = Channel<AutomergeDbSync>;
