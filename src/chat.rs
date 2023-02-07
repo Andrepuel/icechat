@@ -4,7 +4,6 @@ use crate::{
     pipe_sync::{PipeSync, PipeSyncValue},
 };
 use futures_util::{future::select_all, FutureExt};
-use icepipe::crypto_stream::Chacha20Stream;
 use std::{
     path::{Path, PathBuf},
     pin::Pin,
@@ -18,7 +17,7 @@ pub struct Chat {
     sync: Vec<Pin<Box<ChatSync>>>,
 }
 impl Chat {
-    pub fn load<P: AsRef<Path>, I: IntoIterator<Item = Chacha20Stream>>(
+    pub fn load<P: AsRef<Path>, I: IntoIterator<Item = icepipe::connect::Connection>>(
         path: P,
         connections: I,
     ) -> Chat {
@@ -164,5 +163,6 @@ impl Chat {
     }
 }
 
-pub type ChatValue = (PipeSyncValue, usize);
-type ChatSync = PipeSync<AutomergeDbSync, Fragmentable<Chacha20Stream>>;
+pub type ChatValue = (PipeSyncValue<ChatSyncStream>, usize);
+type ChatSyncStream = Fragmentable<icepipe::connect::Connection>;
+type ChatSync = PipeSync<AutomergeDbSync, ChatSyncStream>;

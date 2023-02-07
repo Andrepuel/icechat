@@ -1,13 +1,20 @@
 use crate::database::DbSync;
-use icepipe::pipe_stream::PipeStream;
-use std::any::Any;
+use icepipe::pipe_stream::{PipeStream, StreamError};
 
-pub struct PipeSync<S: DbSync, P: PipeStream> {
+pub struct PipeSync<S: DbSync, P>
+where
+    P: PipeStream,
+    P::Error: Into<StreamError>,
+{
     sync: S,
     pipe: P,
     pending: Option<PipeSyncPending>,
 }
-impl<S: DbSync, P: PipeStream> PipeSync<S, P> {
+impl<S: DbSync, P> PipeSync<S, P>
+where
+    P: PipeStream,
+    P::Error: Into<StreamError>,
+{
     pub fn new(sync: S, pipe: P) -> Self {
         Self {
             sync,
@@ -33,21 +40,21 @@ impl<S: DbSync, P: PipeStream> PipeSync<S, P> {
         }
     }
 
-    pub async fn wait(&mut self) -> PipeSyncValue {
+    pub async fn wait(&mut self) -> PipeSyncValue<P> {
         match self.pending.take() {
             Some(PipeSyncPending::Rx(_)) => {
                 unreachable!()
             }
             Some(PipeSyncPending::Tx(message)) => PipeSyncValue::Tx(message),
-            None => PipeSyncValue::Rx(self.pipe.wait_dyn().await.unwrap()),
+            None => PipeSyncValue::Rx(self.pipe.wait().await.unwrap()),
         }
     }
 
-    pub async fn then(&mut self, value: PipeSyncValue) {
+    pub async fn then(&mut self, value: PipeSyncValue<P>) {
         assert!(self.pending.is_none());
         match value {
             PipeSyncValue::Rx(mut value) => {
-                if let Some(message) = self.pipe.then_dyn(&mut value).await.unwrap() {
+                if let Some(message) = self.pipe.then(&mut value).await.unwrap() {
                     self.pending = Some(PipeSyncPending::Rx(message));
                 }
             }
@@ -71,9 +78,13 @@ pub enum PipeSyncPending {
     Tx(Vec<u8>),
 }
 
-pub enum PipeSyncValue {
+pub enum PipeSyncValue<P>
+where
+    P: PipeStream,
+    P::Error: Into<StreamError>,
+{
     Tx(Vec<u8>),
-    Rx(Box<dyn Any>),
+    Rx(P::Value),
 }
 
 #[cfg(test)]

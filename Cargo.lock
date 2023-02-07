@@ -18,12 +18,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.68"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cb2f989d18dd141ab8ae82f64d1a8cdd37e0840f73a406896cf5e99502fab61"
-
-[[package]]
 name = "arc-swap"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -480,17 +474,17 @@ dependencies = [
  "futures-util",
  "icepipe",
  "rstest",
+ "thiserror",
  "tokio",
  "uuid",
 ]
 
 [[package]]
 name = "icepipe"
-version = "0.1.2"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf7d875da08962fff501f1f469f67dd3d8792dd5ad3860cb43d2744e57a3b264"
+checksum = "ef7ddbfb53fee697ab4ee0c9308ea34fc57a9e077f7add0027ddb2fcf511d1c9"
 dependencies = [
- "anyhow",
  "base64 0.21.0",
  "bytes",
  "clap",
@@ -498,6 +492,7 @@ dependencies = [
  "futures",
  "log",
  "ring",
+ "thiserror",
  "tokio",
  "tokio-tungstenite",
  "url",

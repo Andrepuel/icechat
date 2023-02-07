@@ -1,5 +1,6 @@
-use futures_util::FutureExt;
-use icepipe::pipe_stream::{Control, PipeStream, WaitThen};
+use futures_util::{future::LocalBoxFuture, FutureExt};
+use icepipe::pipe_stream::{Control, PipeStream, StreamError, WaitThen};
+use std::io;
 
 pub struct ChannelPipe {
     send: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
@@ -27,14 +28,14 @@ impl ChannelPipe {
     }
 }
 impl PipeStream for ChannelPipe {
-    fn send<'a>(&'a mut self, data: &'a [u8]) -> icepipe::PinFutureLocal<'a, ()> {
+    fn send<'a>(&'a mut self, data: &'a [u8]) -> LocalBoxFuture<'a, ChannelPipeResult<()>> {
         async move {
             self.send
                 .as_mut()
-                .unwrap()
+                .ok_or(ChannelPipeError::BrokenPipe)?
                 .send(data.to_vec())
                 .await
-                .unwrap();
+                .map_err(|_| ChannelPipeError::ConnectionReset)?;
 
             Ok(())
         }
@@ -44,15 +45,16 @@ impl PipeStream for ChannelPipe {
 impl WaitThen for ChannelPipe {
     type Value = Option<Vec<u8>>;
     type Output = Option<Vec<u8>>;
+    type Error = ChannelPipeError;
 
-    fn wait(&mut self) -> icepipe::PinFutureLocal<'_, Self::Value> {
+    fn wait(&mut self) -> LocalBoxFuture<'_, ChannelPipeResult<Self::Value>> {
         async move { Ok(self.recv.recv().await) }.boxed_local()
     }
 
     fn then<'a>(
         &'a mut self,
         value: &'a mut Self::Value,
-    ) -> icepipe::PinFutureLocal<'a, Self::Output> {
+    ) -> LocalBoxFuture<'a, ChannelPipeResult<Self::Output>> {
         let value = value.take();
 
         async move {
@@ -68,7 +70,7 @@ impl WaitThen for ChannelPipe {
     }
 }
 impl Control for ChannelPipe {
-    fn close(&mut self) -> icepipe::PinFutureLocal<'_, ()> {
+    fn close(&mut self) -> LocalBoxFuture<'_, ChannelPipeResult<()>> {
         self.send = None;
         async move { Ok(()) }.boxed_local()
     }
@@ -77,3 +79,27 @@ impl Control for ChannelPipe {
         self.closed
     }
 }
+
+#[derive(thiserror::Error, Debug)]
+pub enum ChannelPipeError {
+    #[error("This ChannelPipe was already closed")]
+    BrokenPipe,
+    #[error("Receiver side of this ChannelPipe was closed")]
+    ConnectionReset,
+}
+impl From<ChannelPipeError> for io::Error {
+    fn from(value: ChannelPipeError) -> Self {
+        let kind = match value {
+            ChannelPipeError::BrokenPipe => io::ErrorKind::BrokenPipe,
+            ChannelPipeError::ConnectionReset => io::ErrorKind::ConnectionReset,
+        };
+
+        io::Error::new(kind, value)
+    }
+}
+impl From<ChannelPipeError> for StreamError {
+    fn from(value: ChannelPipeError) -> Self {
+        StreamError::Io(value.into())
+    }
+}
+pub type ChannelPipeResult<T> = Result<T, ChannelPipeError>;

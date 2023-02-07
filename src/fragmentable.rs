@@ -1,18 +1,22 @@
 use byteorder::{BigEndian, ByteOrder};
-use futures_util::FutureExt;
-use icepipe::{
-    pipe_stream::{Control, PipeStream, WaitThen, WaitThenDyn},
-    DynResult,
-};
-use std::any::Any;
+use futures_util::{future::LocalBoxFuture, FutureExt};
+use icepipe::pipe_stream::{Control, PipeStream, StreamError, WaitThen};
 
 const MAX_LEN: usize = 4096;
 
-pub struct Fragmentable<P: PipeStream> {
+pub struct Fragmentable<P>
+where
+    P: PipeStream,
+    P::Error: Into<StreamError>,
+{
     underlying: P,
     rx_buf: Vec<u8>,
 }
-impl<P: PipeStream> Fragmentable<P> {
+impl<P> Fragmentable<P>
+where
+    P: PipeStream,
+    P::Error: Into<StreamError>,
+{
     pub fn new(underlying: P) -> Self {
         Self {
             underlying,
@@ -20,7 +24,7 @@ impl<P: PipeStream> Fragmentable<P> {
         }
     }
 
-    async fn send_packet(&mut self, mut packet: &[u8]) -> DynResult<()> {
+    async fn send_packet(&mut self, mut packet: &[u8]) -> Result<(), P::Error> {
         while !packet.is_empty() {
             let n = MAX_LEN.min(packet.len());
             let send = &packet[..n];
@@ -50,8 +54,12 @@ impl<P: PipeStream> Fragmentable<P> {
         out
     }
 }
-impl<P: PipeStream> PipeStream for Fragmentable<P> {
-    fn send<'a>(&'a mut self, data: &'a [u8]) -> icepipe::PinFutureLocal<'a, ()> {
+impl<P> PipeStream for Fragmentable<P>
+where
+    P: PipeStream,
+    P::Error: Into<StreamError>,
+{
+    fn send<'a>(&'a mut self, data: &'a [u8]) -> LocalBoxFuture<'a, Result<(), P::Error>> {
         async move {
             let mut packet = vec![0; 2];
             BigEndian::write_u16(&mut packet, data.len() as u16);
@@ -63,8 +71,12 @@ impl<P: PipeStream> PipeStream for Fragmentable<P> {
         .boxed_local()
     }
 }
-impl<P: PipeStream> Control for Fragmentable<P> {
-    fn close(&mut self) -> icepipe::PinFutureLocal<'_, ()> {
+impl<P> Control for Fragmentable<P>
+where
+    P: PipeStream,
+    P::Error: Into<StreamError>,
+{
+    fn close(&mut self) -> LocalBoxFuture<'_, Result<(), P::Error>> {
         Control::close(&mut self.underlying)
     }
 
@@ -72,29 +84,34 @@ impl<P: PipeStream> Control for Fragmentable<P> {
         Control::rx_closed(&self.underlying)
     }
 }
-impl<P: PipeStream> WaitThen for Fragmentable<P> {
-    type Value = Option<Box<dyn Any>>;
+impl<P> WaitThen for Fragmentable<P>
+where
+    P: PipeStream,
+    P::Error: Into<StreamError>,
+{
+    type Value = Option<P::Value>;
     type Output = Option<Vec<u8>>;
+    type Error = P::Error;
 
-    fn wait(&mut self) -> icepipe::PinFutureLocal<'_, Option<Box<dyn Any>>> {
+    fn wait(&mut self) -> LocalBoxFuture<'_, Result<Self::Value, P::Error>> {
         async move {
             if self.read_ready() {
                 return Ok(None);
             }
 
-            Ok(Some(WaitThenDyn::wait_dyn(&mut self.underlying).await?))
+            Ok(Some(WaitThen::wait(&mut self.underlying).await?))
         }
         .boxed_local()
     }
 
     fn then<'a>(
         &'a mut self,
-        value: &'a mut Option<Box<dyn Any>>,
-    ) -> icepipe::PinFutureLocal<'_, Self::Output> {
+        value: &'a mut Self::Value,
+    ) -> LocalBoxFuture<'_, Result<Self::Output, P::Error>> {
         async move {
             let value = value.take();
             if let Some(mut value) = value {
-                if let Some(data) = self.underlying.then_dyn(&mut value).await? {
+                if let Some(data) = self.underlying.then(&mut value).await? {
                     self.rx_buf.extend(data);
                 }
             }
@@ -122,7 +139,7 @@ pub mod tests {
     #[derive(Default, Clone)]
     struct ArcStream(Arc<Mutex<VecDeque<Vec<u8>>>>);
     impl PipeStream for ArcStream {
-        fn send<'a>(&'a mut self, data: &'a [u8]) -> icepipe::PinFutureLocal<'a, ()> {
+        fn send<'a>(&'a mut self, data: &'a [u8]) -> LocalBoxFuture<'a, Result<(), StreamError>> {
             async move {
                 self.0.lock().unwrap().push_back(data.to_vec());
                 Ok(())
@@ -131,7 +148,7 @@ pub mod tests {
         }
     }
     impl Control for ArcStream {
-        fn close(&mut self) -> icepipe::PinFutureLocal<'_, ()> {
+        fn close(&mut self) -> LocalBoxFuture<'_, Result<(), StreamError>> {
             unreachable!()
         }
 
@@ -139,10 +156,12 @@ pub mod tests {
             unreachable!()
         }
     }
-    impl WaitThenDyn for ArcStream {
+    impl WaitThen for ArcStream {
+        type Value = ();
         type Output = Option<Vec<u8>>;
+        type Error = StreamError;
 
-        fn wait_dyn(&mut self) -> icepipe::PinFutureLocal<'_, Box<dyn Any>> {
+        fn wait(&mut self) -> LocalBoxFuture<'_, Result<(), StreamError>> {
             async move {
                 let empty = self.0.lock().unwrap().is_empty();
                 if empty {
@@ -150,17 +169,15 @@ pub mod tests {
                     unreachable!()
                 };
 
-                let r: Box<dyn Any> = Box::new(());
-
-                Ok(r)
+                Ok(())
             }
             .boxed_local()
         }
 
-        fn then_dyn<'a>(
+        fn then<'a>(
             &'a mut self,
-            _value: &'a mut Box<dyn std::any::Any>,
-        ) -> icepipe::PinFutureLocal<'_, Self::Output> {
+            _value: &'a mut (),
+        ) -> LocalBoxFuture<'_, Result<Self::Output, StreamError>> {
             async move { Ok(self.0.lock().unwrap().pop_front()) }.boxed_local()
         }
     }
@@ -190,8 +207,8 @@ pub mod tests {
         }
 
         let data_back = loop {
-            let mut value = fragmentable.wait_dyn().await.unwrap();
-            if let Some(data_back) = fragmentable.then_dyn(&mut value).await.unwrap() {
+            let mut value = fragmentable.wait().await.unwrap();
+            if let Some(data_back) = fragmentable.then(&mut value).await.unwrap() {
                 break data_back;
             }
         };
@@ -206,11 +223,11 @@ pub mod tests {
         )));
         let mut fragmentable = Fragmentable::new(stream.clone());
 
-        let mut value = fragmentable.wait_dyn().await.unwrap();
-        let data = fragmentable.then_dyn(&mut value).await.unwrap();
+        let mut value = fragmentable.wait().await.unwrap();
+        let data = fragmentable.then(&mut value).await.unwrap();
         assert_eq!(data, Some(vec![10]));
-        let mut value = fragmentable.wait_dyn().await.unwrap();
-        let data = fragmentable.then_dyn(&mut value).await.unwrap();
+        let mut value = fragmentable.wait().await.unwrap();
+        let data = fragmentable.then(&mut value).await.unwrap();
         assert_eq!(data, Some(vec![11]));
     }
 }
