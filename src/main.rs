@@ -151,7 +151,10 @@ impl ConversationTab {
                 if ui.button("Send").clicked() && !self.message.is_empty() {
                     send_message(&mut self.message);
                 }
-                if ui.input_mut().consume_key(egui::Modifiers::default(), egui::Key::Enter) {
+                if ui
+                    .input_mut()
+                    .consume_key(egui::Modifiers::default(), egui::Key::Enter)
+                {
                     send_message(&mut self.message);
                     text_edit.request_focus();
                 }
@@ -172,46 +175,48 @@ impl ConversationTab {
             });
         });
 
-        egui::SidePanel::right("channels").show_inside(ui, |ui| {
-            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                ui.heading("Channels");
-                let mut remove = None;
-                for (channel, state) in self.chat.channels() {
-                    ui.horizontal(|ui| {
-                        if ui.button("X").clicked() {
-                            remove = Some(channel.to_string());
-                        }
-                        ui.label(format!("{channel}: {state:?}"));
-                    });
-                }
-
-                if let Some(remove) = remove {
-                    self.chat.remove_channel(&remove);
-                    self.chat.save();
-                }
-
-                ui.horizontal(|ui| {
-                    ui.label("New channel:");
-                    ui.text_edit_singleline(&mut self.new_channel);
-                    if ui.button("Add").clicked() {
-                        self.chat.add_channel(std::mem::take(&mut self.new_channel));
-                        self.chat.save();
-                    }
-                });
-                ui.heading("Profile");
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    ui.text_edit_singleline(&mut self.name);
-                    if ui.button("Save").clicked() {
-                        self.chat.set_profile(Contact {
-                            name: self.name.to_string(),
-                            ..self.chat.profile()
+        egui::SidePanel::right("channels")
+            .default_width(256.0)
+            .show_inside(ui, |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    ui.heading("Channels");
+                    let mut remove = None;
+                    for (channel, state) in self.chat.channels() {
+                        ui.horizontal(|ui| {
+                            if ui.button("X").clicked() {
+                                remove = Some(channel.to_string());
+                            }
+                            ui.label(format!("({state:?}) {channel}"));
                         });
+                    }
+
+                    if let Some(remove) = remove {
+                        self.chat.remove_channel(&remove);
                         self.chat.save();
                     }
+
+                    ui.horizontal(|ui| {
+                        ui.label("New channel:");
+                        ui.text_edit_singleline(&mut self.new_channel);
+                        if ui.button("Add").clicked() {
+                            self.chat.add_channel(std::mem::take(&mut self.new_channel));
+                            self.chat.save();
+                        }
+                    });
+                    ui.heading("Profile");
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.name);
+                        if ui.button("Save").clicked() {
+                            self.chat.set_profile(Contact {
+                                name: self.name.to_string(),
+                                ..self.chat.profile()
+                            });
+                            self.chat.save();
+                        }
+                    });
                 });
             });
-        });
     }
 
     async fn wait(&mut self) -> ChatValue {
