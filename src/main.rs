@@ -140,11 +140,20 @@ impl ConversationTab {
     fn ui(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.message);
-                if ui.button("Send").clicked() && !self.message.is_empty() {
-                    let content = std::mem::take(&mut self.message);
+                let text_edit = ui.text_edit_singleline(&mut self.message);
+
+                let mut send_message = |msg: &mut String| {
+                    let content = std::mem::take(msg);
                     self.chat.send_message(content);
                     self.chat.save();
+                };
+
+                if ui.button("Send").clicked() && !self.message.is_empty() {
+                    send_message(&mut self.message);
+                }
+                if ui.input_mut().consume_key(egui::Modifiers::default(), egui::Key::Enter) {
+                    send_message(&mut self.message);
+                    text_edit.request_focus();
                 }
             });
             egui::containers::ScrollArea::vertical().show(ui, |ui| {
