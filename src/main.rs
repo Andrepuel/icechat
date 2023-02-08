@@ -1,138 +1,210 @@
-use clap::Parser;
+use eframe::egui;
+use egui_dock::Tree;
+use futures_util::{future::select_all, FutureExt};
 use icechat::{
-    chat::Chat,
-    database::{Contact, Message, MessageStatus},
+    chat::{Chat, ChatValue},
+    database::Contact,
+    poll_runtime::PollRuntime,
 };
-use tokio::io::AsyncBufReadExt;
+use rfd::FileDialog;
+use std::{cell::RefCell, path::Path, time::Duration};
 use uuid::Uuid;
 
-#[derive(clap::Parser, Debug)]
-struct Args {
-    /// Path to the database folder
-    path: String,
-
-    #[command(subcommand)]
-    command: Subcommand,
-}
-
-#[derive(clap::Subcommand, Debug)]
-enum Subcommand {
-    /// Initializes a new database folder
-    Init,
-    /// Connects to chat and then set profile
-    SetProfile { name: String },
-    /// Connects to chat
-    Chat {
-        /// Synchronization channels
-        channels: Vec<String>,
-    },
-}
-
 fn main() {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async_main())
-}
-
-async fn async_main() {
     env_logger::init();
 
-    let args = Args::parse();
+    eframe::run_native(
+        "Icechat",
+        Default::default(),
+        Box::new(|_| Box::<App>::default()),
+    )
+}
 
-    let channels = match &args.command {
-        Subcommand::Init => {
-            Chat::init(Uuid::new_v4(), &args.path);
-            return;
-        }
-        Subcommand::SetProfile { .. } => {
-            static EMPTY: Vec<String> = vec![];
-            &EMPTY
-        }
-        Subcommand::Chat { channels } => channels,
-    };
+#[derive(Default)]
+struct App {
+    conversations: Tree<RefCell<ConversationTab>>,
+    runtime: PollRuntime,
+}
+impl eframe::App for App {
+    fn update(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
+        #![allow(clippy::await_holding_refcell_ref)]
+        ctx.request_repaint_after(Duration::from_millis(5));
 
-    let channels = channels.iter().cloned();
+        self.runtime.poll(async {
+            let mut tabs = self
+                .conversations
+                .tabs()
+                .map(|tab| tab.borrow_mut())
+                .collect::<Vec<_>>();
 
-    let mut chat = Chat::load(&args.path, channels);
+            if tabs.is_empty() {
+                return;
+            }
 
-    match &args.command {
-        Subcommand::Init => {
-            unreachable!()
-        }
-        Subcommand::SetProfile { name } => {
-            let contact = chat.profile();
-            let contact = Contact {
-                name: name.to_string(),
-                ..contact
+            let wait = select_all(tabs.iter_mut().map(|tab| tab.wait().boxed_local()));
+            let Ok((value, index, _)) = tokio::time::timeout(Duration::from_millis(1), wait).await else {
+                return;
             };
-            chat.set_profile(contact);
+
+            tabs[index].then(value).await;
+        });
+
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("New").clicked() {
+                        let path = FileDialog::new()
+                            .add_filter("Icechat File", &["icechat"])
+                            .save_file();
+
+                        if let Some(path) = path {
+                            Chat::init(Uuid::new_v4(), &path);
+
+                            self.conversations
+                                .push_to_first_leaf(RefCell::new(ConversationTab::load(path)));
+                        }
+                    }
+
+                    if ui.button("Open").clicked() {
+                        let path = FileDialog::new()
+                            .add_filter("Icechat File", &["icechat"])
+                            .pick_file();
+
+                        if let Some(path) = path {
+                            self.conversations
+                                .push_to_first_leaf(RefCell::new(ConversationTab::load(path)));
+                        }
+                    }
+
+                    if ui.button("Quit").clicked() {
+                        frame.close();
+                    }
+                });
+            });
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let style = egui_dock::Style::from_egui(ui.style().as_ref());
+            egui_dock::DockArea::new(&mut self.conversations)
+                .style(style)
+                .show_inside(ui, &mut TabViewer {});
+        });
+    }
+}
+
+struct TabViewer {}
+impl egui_dock::TabViewer for TabViewer {
+    type Tab = RefCell<ConversationTab>;
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        tab.borrow_mut().ui(ui);
+    }
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        tab.borrow_mut().title().into()
+    }
+}
+
+struct ConversationTab {
+    title: String,
+    chat: Chat,
+    name: String,
+    new_channel: String,
+    message: String,
+}
+impl ConversationTab {
+    fn load<P: AsRef<Path>>(path: P) -> ConversationTab {
+        let path = path.as_ref();
+        let title = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let chat = Chat::load(path);
+        let name = chat.profile().name;
+
+        ConversationTab {
+            title,
+            chat,
+            name,
+            new_channel: Default::default(),
+            message: Default::default(),
         }
-        Subcommand::Chat { .. } => {}
-    };
+    }
 
-    let mut read_messages = view(&mut chat, 0);
-    view_users(&chat);
+    fn title(&self) -> &str {
+        &self.title
+    }
 
-    let stdin = tokio::io::stdin();
-    let mut stdin = tokio::io::BufReader::new(stdin);
-
-    loop {
-        let mut buf = Default::default();
-        tokio::select! {
-            r = stdin.read_line(&mut buf) => {
-                r.unwrap();
-                if buf.is_empty() {
-                    break;
+    fn ui(&mut self, ui: &mut egui::Ui) {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::containers::ScrollArea::vertical().show(ui, |ui| {
+                ui.vertical(|ui| {
+                    for message in self.chat.list_messages() {
+                        let from = self.chat.get_peer(message.from).unwrap_or_default();
+                        ui.label(from.name);
+                        ui.label(message.content);
+                        ui.separator();
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.message);
+                if ui.button("Send").clicked() && !self.message.is_empty() {
+                    let content = std::mem::take(&mut self.message);
+                    self.chat.send_message(content);
+                    self.chat.save();
                 }
-                chat.send_message(buf);
-            }
-            value = chat.wait() => {
-                let changed_channel = chat.then(value).await;
+            })
+        });
 
-                if let Some((new_state, index)) = changed_channel {
-                    println!("Channel {index}: {new_state:?}");
+        egui::SidePanel::right("channels").show_inside(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.heading("Channels");
+                let mut remove = None;
+                for (channel, state) in self.chat.channels() {
+                    ui.horizontal(|ui| {
+                        if ui.button("X").clicked() {
+                            remove = Some(channel.to_string());
+                        }
+                        ui.label(format!("{channel}: {state:?}"));
+                    });
                 }
-            }
-        }
-        read_messages = view(&mut chat, read_messages);
+
+                if let Some(remove) = remove {
+                    self.chat.remove_channel(&remove);
+                    self.chat.save();
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label("New channel:");
+                    ui.text_edit_singleline(&mut self.new_channel);
+                    if ui.button("Add").clicked() {
+                        self.chat.add_channel(std::mem::take(&mut self.new_channel));
+                        self.chat.save();
+                    }
+                });
+                ui.heading("Profile");
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.name);
+                    if ui.button("Save").clicked() {
+                        self.chat.set_profile(Contact {
+                            name: self.name.to_string(),
+                            ..self.chat.profile()
+                        });
+                        self.chat.save();
+                    }
+                });
+            });
+        });
     }
-    println!("Closing...");
-    chat.close().await;
-}
 
-fn view(chat: &mut Chat, index: usize) -> usize {
-    let mut delivered = vec![];
-
-    let mut last = None;
-    for (index, message) in chat.list_messages().enumerate().skip(index) {
-        if message.status == MessageStatus::Sent && message.from != chat.user() {
-            delivered.push(index);
-        }
-
-        print_message(chat, &message);
-        last = Some(index);
+    async fn wait(&mut self) -> ChatValue {
+        self.chat.wait().await
     }
 
-    for index in delivered {
-        chat.set_message_status(index, MessageStatus::Delivered);
+    async fn then(&mut self, value: ChatValue) {
+        self.chat.then(value).await;
     }
-
-    last.map(|last| last + 1).unwrap_or(index)
-}
-
-fn view_users(chat: &Chat) {
-    for peer in chat.list_peers() {
-        println!("{:#?}", peer);
-    }
-    println!("{:#?}", chat.profile());
-}
-
-fn print_message(chat: &Chat, message: &Message) {
-    let from = chat.get_peer(message.from).unwrap_or_default();
-    println!("{name}:", name = from.name);
-    println!("{content}", content = message.content);
-    println!("{status:?}", status = message.status);
-    println!()
 }

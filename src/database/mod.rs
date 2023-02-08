@@ -289,7 +289,7 @@ impl LocalDatabaseData {
         let channels = trans.put_object(&obj, "channels", ObjType::List)?;
 
         for (idx, str) in self.channels.iter().enumerate() {
-            trans.put(&channels, idx, str.to_string())?;
+            trans.insert(&channels, idx, str.to_string())?;
         }
 
         Ok(())
@@ -603,6 +603,20 @@ pub mod tests {
             let back = LocalDatabase::load(&data)?;
 
             assert_eq!(database.user(), back.user());
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn it_may_add_channels(given: Given) -> DatabaseResult<()> {
+            let (mut database, ..) = given;
+
+            let mut data = database.get()?;
+            data.channels.push("new channel".to_string());
+            database.set(data.clone())?;
+
+            let data_back = database.get()?;
+            assert_eq!(data, data_back);
 
             Ok(())
         }

@@ -25,6 +25,10 @@ impl<S: DbSync> Channel<S> {
         self.state = ChannelState::PreConnecting(state);
     }
 
+    pub fn channel(&self) -> &str {
+        &self.channel
+    }
+
     pub fn state(&self) -> ChannelStateLabel {
         self.state.label()
     }

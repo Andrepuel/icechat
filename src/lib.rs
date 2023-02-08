@@ -4,3 +4,4 @@ pub mod chat;
 pub mod database;
 pub mod fragmentable;
 pub mod pipe_sync;
+pub mod poll_runtime;
