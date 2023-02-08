@@ -40,7 +40,7 @@ impl SharedDatabase {
         Ok(())
     }
 
-    pub fn set_message(&mut self, index: usize, message: Message) -> DatabaseResult<()> {
+    pub fn set_message(&mut self, index: usize, message: &Message) -> DatabaseResult<()> {
         let mut trans = self.doc.transaction();
         let obj = trans.get_map(schema::messages_id(), index)?;
         message.reconcile(&mut trans, obj)?;
@@ -557,7 +557,7 @@ pub mod tests {
 
                 let mut message = database.list_messages().next().unwrap()?;
                 message.status = MessageStatus::Delivered;
-                database.set_message(0, message.clone())?;
+                database.set_message(0, &message)?;
 
                 let message_back = database.list_messages().next().unwrap()?;
                 assert_eq!(message, message_back);

@@ -127,12 +127,32 @@ impl Chat {
         self.database.list_messages().map(Result::unwrap)
     }
 
+    pub fn new_messages(&mut self) -> Vec<Message> {
+        let user = self.user();
+
+        #[allow(clippy::needless_collect)]
+        let messages = self
+            .list_messages()
+            .enumerate()
+            .filter(|(_, message)| message.from != user && message.status == MessageStatus::Sent)
+            .collect::<Vec<_>>();
+
+        messages
+            .into_iter()
+            .map(|(index, mut message)| {
+                message.status = MessageStatus::Delivered;
+                self.database.set_message(index, &message).unwrap();
+                message
+            })
+            .collect()
+    }
+
     pub fn set_message_status(&mut self, index: usize, status: MessageStatus) {
         let message = self.database.list_messages().nth(index).unwrap().unwrap();
 
         let message = Message { status, ..message };
 
-        self.database.set_message(index, message).unwrap();
+        self.database.set_message(index, &message).unwrap();
     }
 
     pub fn add_channel(&mut self, channel: String) {

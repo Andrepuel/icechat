@@ -4,6 +4,7 @@ use futures_util::{future::select_all, FutureExt};
 use icechat::{
     chat::{Chat, ChatValue},
     database::Contact,
+    notification::NotificationManager,
     poll_runtime::PollRuntime,
 };
 use rfd::FileDialog;
@@ -142,7 +143,11 @@ impl ConversationTab {
                 ui.vertical(|ui| {
                     for message in self.chat.list_messages() {
                         let from = self.chat.get_peer(message.from).unwrap_or_default();
-                        ui.label(from.name);
+                        ui.label(format!(
+                            "({state:?}) {name}",
+                            state = message.status,
+                            name = from.name
+                        ));
                         ui.label(message.content);
                         ui.separator();
                     }
@@ -206,5 +211,14 @@ impl ConversationTab {
 
     async fn then(&mut self, value: ChatValue) {
         self.chat.then(value).await;
+
+        self.poll();
+    }
+
+    fn poll(&mut self) {
+        for message in self.chat.new_messages() {
+            let from = self.chat.get_peer(message.from).unwrap_or_default();
+            NotificationManager::show(from, message)
+        }
     }
 }
