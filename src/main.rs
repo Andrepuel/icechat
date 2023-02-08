@@ -139,9 +139,17 @@ impl ConversationTab {
 
     fn ui(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.message);
+                if ui.button("Send").clicked() && !self.message.is_empty() {
+                    let content = std::mem::take(&mut self.message);
+                    self.chat.send_message(content);
+                    self.chat.save();
+                }
+            });
             egui::containers::ScrollArea::vertical().show(ui, |ui| {
                 ui.vertical(|ui| {
-                    for message in self.chat.list_messages() {
+                    for message in self.chat.list_messages().rev() {
                         let from = self.chat.get_peer(message.from).unwrap_or_default();
                         ui.label(format!(
                             "({state:?}) {name}",
@@ -153,14 +161,6 @@ impl ConversationTab {
                     }
                 });
             });
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.message);
-                if ui.button("Send").clicked() && !self.message.is_empty() {
-                    let content = std::mem::take(&mut self.message);
-                    self.chat.send_message(content);
-                    self.chat.save();
-                }
-            })
         });
 
         egui::SidePanel::right("channels").show_inside(ui, |ui| {
