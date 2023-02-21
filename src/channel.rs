@@ -5,18 +5,25 @@ use crate::{
 };
 use futures_util::{future::LocalBoxFuture, FutureExt};
 use icepipe::{
+    agreement::Ed25519PairAndPeer,
     connect::{ConnectResult, Connection},
     pipe_stream::StreamError,
 };
+use ring::signature::{Ed25519KeyPair, KeyPair};
+use std::ops::Deref;
 
 pub struct Channel<S: DbSync> {
     channel: String,
+    key: Ed25519Seed,
+    peer: Ed25519Cert,
     state: ChannelState<S>,
 }
 impl<S: DbSync> Channel<S> {
-    pub fn new(channel: String) -> Self {
+    pub fn new(channel: String, key: Ed25519Seed, peer: Ed25519Cert) -> Self {
         Self {
             channel,
+            key,
+            peer,
             state: Default::default(),
         }
     }
@@ -86,7 +93,12 @@ impl<S: DbSync> Channel<S> {
                 unreachable!()
             }
             ChannelState::PreConnecting(_) => {
-                Ok(ChannelValue::StartConnection(self.channel.to_string()))
+                let key = Ed25519KeyPair::from_seed_unchecked(&self.key.0).unwrap();
+                let auth = Ed25519PairAndPeer(key, self.peer.to_vec());
+                Ok(ChannelValue::StartConnection(
+                    self.channel.to_string(),
+                    auth,
+                ))
             }
             ChannelState::Connecting(_, connecting) => {
                 let pipe = connecting.await.map_err(StreamError::from)?;
@@ -122,7 +134,7 @@ impl<S: DbSync> Channel<S> {
 
     pub async fn then_impl(&mut self, value: ChannelValue) -> PipeSyncResult<()> {
         match (&mut self.state, value) {
-            (ChannelState::PreConnecting(_), ChannelValue::StartConnection(channel)) => {
+            (ChannelState::PreConnecting(_), ChannelValue::StartConnection(channel, auth)) => {
                 let state = std::mem::take(&mut self.state);
                 let sync = match state {
                     ChannelState::PreConnecting(sync) => sync,
@@ -130,7 +142,13 @@ impl<S: DbSync> Channel<S> {
                 };
 
                 let connecting = async move {
-                    icepipe::connect(&channel, Default::default(), Default::default()).await
+                    icepipe::ConnectOptions {
+                        channel,
+                        signaling: Default::default(),
+                        ice: Default::default(),
+                    }
+                    .connect(auth)
+                    .await
                 }
                 .boxed_local();
                 self.state = ChannelState::Connecting(sync, connecting);
@@ -163,6 +181,33 @@ impl<S: DbSync> Channel<S> {
     }
 }
 
+pub struct Ed25519Seed([u8; 32]);
+impl Ed25519Seed {
+    pub fn new(seed: [u8; 32]) -> Ed25519Seed {
+        Self(seed)
+    }
+
+    pub fn generate() -> Ed25519Seed {
+        let seed = ring::rand::generate(&ring::rand::SystemRandom::new())
+            .unwrap()
+            .expose();
+        Ed25519Seed(seed)
+    }
+
+    pub fn public_key(&self) -> Ed25519Cert {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&self.0).unwrap();
+        key_pair.public_key().as_ref().try_into().unwrap()
+    }
+}
+impl Deref for Ed25519Seed {
+    type Target = [u8; 32];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+pub type Ed25519Cert = [u8; 32];
+
 pub enum ChannelState<S: DbSync> {
     Offline,
     PreConnecting(S),
@@ -187,7 +232,7 @@ impl<S: DbSync> ChannelState<S> {
 
 pub enum ChannelValue {
     Connected,
-    StartConnection(String),
+    StartConnection(String, Ed25519PairAndPeer),
     PipeSyncValue(PipeSyncValue<Fragmentable<Connection>>),
     Error,
 }

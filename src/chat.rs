@@ -1,5 +1,5 @@
 use crate::{
-    channel::{Channel, ChannelStateLabel, ChannelValue},
+    channel::{Channel, ChannelStateLabel, ChannelValue, Ed25519Cert, Ed25519Seed},
     database::{
         error::DatabaseResult, AutomergeDbSync, ChannelData, Contact, LocalDatabase, Message,
         MessageStatus, SharedDatabase,
@@ -7,7 +7,7 @@ use crate::{
 };
 use futures_util::{future::select_all, FutureExt};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
@@ -45,8 +45,8 @@ impl Chat {
             .unwrap()
             .channels
             .into_iter()
-            .map(|channel| channel.channel)
-            .collect::<HashSet<_>>();
+            .map(|channel| (channel.channel.clone(), channel))
+            .collect::<HashMap<_, _>>();
         let instance = self
             .sync
             .iter()
@@ -55,12 +55,20 @@ impl Chat {
 
         self.sync.extend(
             database
-                .difference(&instance)
-                .map(|name| Channel::new(name.clone())),
+                .values()
+                .filter(|new_channel| !instance.contains(&new_channel.channel))
+                .cloned()
+                .map(|channel| {
+                    Channel::new(
+                        channel.channel,
+                        Ed25519Seed::new(channel.private_key.try_into().unwrap()),
+                        channel.peer_cert.try_into().unwrap(),
+                    )
+                }),
         );
 
         self.sync
-            .retain_mut(|channel| database.contains(channel.channel()))
+            .retain_mut(|channel| database.contains_key(channel.channel()))
     }
 
     pub fn init<P: AsRef<Path>>(user: Uuid, path: P) {
@@ -156,9 +164,13 @@ impl Chat {
         self.database.set_message(index, &message).unwrap();
     }
 
-    pub fn add_channel(&mut self, channel: String) {
+    pub fn add_channel(&mut self, channel: String, key: Ed25519Seed, peer: Ed25519Cert) {
         let mut data = self.settings.get().unwrap();
-        data.channels.push(ChannelData::zero_key(channel));
+        data.channels.push(ChannelData {
+            channel,
+            private_key: key.to_vec(),
+            peer_cert: peer.to_vec(),
+        });
         self.settings.set(data).unwrap();
         self.sync_channels();
     }

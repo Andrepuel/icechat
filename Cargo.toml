@@ -14,7 +14,7 @@ eframe = { version = "0.20.1", default-features = false, features = ["wgpu", "de
 egui_dock = "0.3.1"
 env_logger = "0.10.0"
 futures-util = "0.3.26"
-icepipe = "0.2.1"
+icepipe = "0.4.1"
 log = "0.4.17"
 notify-rust = "4.7.0"
 rfd = "0.11.0"

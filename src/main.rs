@@ -2,6 +2,7 @@ use eframe::egui;
 use egui_dock::Tree;
 use futures_util::{future::select_all, FutureExt};
 use icechat::{
+    channel::{Ed25519Cert, Ed25519Seed},
     chat::{Chat, ChatValue},
     database::Contact,
     notification::NotificationManager,
@@ -111,6 +112,8 @@ struct ConversationTab {
     chat: Chat,
     name: String,
     new_channel: String,
+    new_channel_seed: Ed25519Seed,
+    new_channel_pub: Ed25519Cert,
     message: String,
 }
 impl ConversationTab {
@@ -124,11 +127,16 @@ impl ConversationTab {
         let chat = Chat::load(path);
         let name = chat.profile().name;
 
+        let new_channel_seed = Ed25519Seed::generate();
+        let new_channel_pub = new_channel_seed.public_key();
+
         ConversationTab {
             title,
             chat,
             name,
             new_channel: Default::default(),
+            new_channel_seed,
+            new_channel_pub,
             message: Default::default(),
         }
     }
@@ -196,10 +204,40 @@ impl ConversationTab {
                     }
 
                     ui.horizontal(|ui| {
-                        ui.label("New channel:");
+                        let key = self
+                            .new_channel_pub
+                            .iter()
+                            .map(|x| format!("{x:02x}"))
+                            .collect::<String>();
+
+                        if ui.button("📋").clicked() {
+                            ui.output().copied_text = key.clone();
+                        }
+                        ui.label(format!("New Public key: {key}"))
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Peer pub key:");
                         ui.text_edit_singleline(&mut self.new_channel);
                         if ui.button("Add").clicked() {
-                            self.chat.add_channel(std::mem::take(&mut self.new_channel));
+                            let seed = std::mem::replace(
+                                &mut self.new_channel_seed,
+                                Ed25519Seed::generate(),
+                            );
+                            let peer = std::mem::take(&mut self.new_channel);
+                            let mut peer = (0..peer.len())
+                                .step_by(2)
+                                .map(|idx| {
+                                    u8::from_str_radix(&peer[idx..][..2], 16).unwrap_or_default()
+                                })
+                                .collect::<Vec<u8>>();
+                            peer.resize(32, 0);
+                            let peer = peer.try_into().unwrap();
+
+                            self.new_channel_pub = self.new_channel_seed.public_key();
+                            let channel = agree_channel(&seed, &peer);
+
+                            self.chat.add_channel(channel, seed, peer);
                             self.chat.save();
                         }
                     });
@@ -235,4 +273,19 @@ impl ConversationTab {
             NotificationManager::show(from, message)
         }
     }
+}
+
+fn agree_channel(key: &Ed25519Seed, peer: &Ed25519Cert) -> String {
+    let x25519_user = icepipe::curve25519_conversion::ed25519_seed_to_x25519(key.as_slice());
+    let x25519_peer =
+        icepipe::curve25519_conversion::ed25519_public_key_to_x25519(peer.as_slice()).unwrap();
+
+    let secret = x25519_user.diffie_hellman(&x25519_peer);
+    let basekey = secret
+        .as_bytes()
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect::<String>();
+
+    icepipe::agreement::PskAuthentication::derive_text(&basekey, "channel agreement")
 }
