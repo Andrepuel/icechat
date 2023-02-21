@@ -8,6 +8,7 @@ use automerge::{
     Automerge, ObjId, ObjType, ReadDoc, ROOT,
 };
 use doc_ex::ReadDocEx;
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use uuid::Uuid;
 
 pub struct SharedDatabase {
@@ -263,7 +264,7 @@ impl LocalDatabase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDatabaseData {
     pub user: Uuid,
-    pub channels: Vec<String>,
+    pub channels: Vec<ChannelData>,
 }
 impl LocalDatabaseData {
     pub fn hydrate<D: ReadDoc>(doc: &D, obj: ObjId) -> DatabaseResult<LocalDatabaseData> {
@@ -275,7 +276,15 @@ impl LocalDatabaseData {
         let channels = doc.get_list(&obj, "channels")?;
         let channels_n = doc.length(&channels);
         let channels = (0..channels_n)
-            .map(|idx| doc.get_string(&channels, idx))
+            .map(|idx| {
+                let channel_only = doc.get_string(&channels, idx);
+                if let Ok(channel_only) = channel_only {
+                    return Ok(ChannelData::zero_key(channel_only));
+                }
+
+                let obj = doc.get_map(&channels, idx)?;
+                ChannelData::hydrate(doc, obj)
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(LocalDatabaseData {
@@ -288,9 +297,59 @@ impl LocalDatabaseData {
         trans.put(&obj, "user", self.user.as_bytes().to_vec())?;
         let channels = trans.put_object(&obj, "channels", ObjType::List)?;
 
-        for (idx, str) in self.channels.iter().enumerate() {
-            trans.insert(&channels, idx, str.to_string())?;
+        for (idx, channel) in self.channels.iter().enumerate() {
+            let obj = trans.insert_object(&channels, idx, ObjType::Map)?;
+            channel.reconcile(trans, obj)?;
         }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ChannelData {
+    pub channel: String,
+    pub private_key: Vec<u8>,
+    pub peer_cert: Vec<u8>,
+}
+impl std::fmt::Debug for ChannelData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelData")
+            .field("channel", &self.channel)
+            .field("private_key", &self.private_key.len())
+            .field("peer_cert", &self.peer_cert)
+            .finish()
+    }
+}
+impl ChannelData {
+    pub fn zero_key(channel: String) -> ChannelData {
+        let private_key = [0; 32].to_vec();
+        let peer_key = Ed25519KeyPair::from_seed_unchecked(&private_key).unwrap();
+        let peer_cert = peer_key.public_key().as_ref().to_owned();
+
+        ChannelData {
+            channel,
+            private_key,
+            peer_cert,
+        }
+    }
+
+    pub fn hydrate<D: ReadDoc>(doc: &D, obj: ObjId) -> DatabaseResult<Self> {
+        let channel = doc.get_string(&obj, "channel")?;
+        let private_key = doc.get_bytes(&obj, "private_key")?;
+        let peer_cert = doc.get_bytes(&obj, "peer_cert")?;
+
+        Ok(ChannelData {
+            channel,
+            private_key,
+            peer_cert,
+        })
+    }
+
+    pub fn reconcile<T: Transactable>(&self, trans: &mut T, obj: ObjId) -> DatabaseResult<()> {
+        trans.put(&obj, "channel", self.channel.as_str())?;
+        trans.put(&obj, "private_key", self.private_key.clone())?;
+        trans.put(&obj, "peer_cert", self.peer_cert.clone())?;
 
         Ok(())
     }
@@ -612,7 +671,8 @@ pub mod tests {
             let (mut database, ..) = given;
 
             let mut data = database.get()?;
-            data.channels.push("new channel".to_string());
+            data.channels
+                .push(ChannelData::zero_key("new channel".to_string()));
             database.set(data.clone())?;
 
             let data_back = database.get()?;

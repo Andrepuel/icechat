@@ -1,8 +1,8 @@
 use crate::{
     channel::{Channel, ChannelStateLabel, ChannelValue},
     database::{
-        error::DatabaseResult, AutomergeDbSync, Contact, LocalDatabase, Message, MessageStatus,
-        SharedDatabase,
+        error::DatabaseResult, AutomergeDbSync, ChannelData, Contact, LocalDatabase, Message,
+        MessageStatus, SharedDatabase,
     },
 };
 use futures_util::{future::select_all, FutureExt};
@@ -45,6 +45,7 @@ impl Chat {
             .unwrap()
             .channels
             .into_iter()
+            .map(|channel| channel.channel)
             .collect::<HashSet<_>>();
         let instance = self
             .sync
@@ -157,7 +158,7 @@ impl Chat {
 
     pub fn add_channel(&mut self, channel: String) {
         let mut data = self.settings.get().unwrap();
-        data.channels.push(channel);
+        data.channels.push(ChannelData::zero_key(channel));
         self.settings.set(data).unwrap();
         self.sync_channels();
     }
@@ -165,7 +166,7 @@ impl Chat {
     pub fn remove_channel(&mut self, channel: &str) {
         let mut data = self.settings.get().unwrap();
         data.channels
-            .retain(|existent_channel| existent_channel != channel);
+            .retain(|existent_channel| existent_channel.channel != channel);
         self.settings.set(data).unwrap();
         self.sync_channels();
     }

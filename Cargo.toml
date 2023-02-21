@@ -18,6 +18,7 @@ icepipe = "0.2.1"
 log = "0.4.17"
 notify-rust = "4.7.0"
 rfd = "0.11.0"
+ring = "0.16.20"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0.38"
 tokio = "1.25"
