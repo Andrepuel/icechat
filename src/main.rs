@@ -176,7 +176,12 @@ impl ConversationTab {
                             state = message.status,
                             name = from.name
                         ));
-                        ui.label(message.content);
+                        ui.horizontal(|ui| {
+                            if ui.button("📋").clicked() {
+                                ui.output().copied_text = message.content.clone();
+                            }
+                            ui.label(message.content);
+                        });
                         ui.separator();
                     }
                 });
