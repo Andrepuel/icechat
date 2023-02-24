@@ -148,7 +148,7 @@ impl ConversationTab {
     fn ui(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                let text_edit = ui.text_edit_singleline(&mut self.message);
+                let text_edit = ui.text_edit_multiline(&mut self.message);
 
                 let mut send_message = |msg: &mut String| {
                     let content = std::mem::take(msg);
@@ -177,6 +177,13 @@ impl ConversationTab {
                             name = from.name
                         ));
                         ui.horizontal(|ui| {
+                            if ui.button("⬅").clicked() {
+                                self.message = format!(
+                                    "{sender} said:\n{message}\n\n",
+                                    sender = from.name,
+                                    message = message.content
+                                );
+                            }
                             if ui.button("📋").clicked() {
                                 ui.output().copied_text = message.content.clone();
                             }
