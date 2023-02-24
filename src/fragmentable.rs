@@ -36,21 +36,21 @@ where
     }
 
     fn read_ready(&self) -> bool {
-        if self.rx_buf.len() < 2 {
+        if self.rx_buf.len() < 4 {
             return false;
         }
 
-        self.rx_buf.len() - 2 >= self.next_packet_len()
+        self.rx_buf.len() - 4 >= self.next_packet_len()
     }
 
     fn next_packet_len(&self) -> usize {
-        BigEndian::read_u16(&self.rx_buf) as usize
+        BigEndian::read_u32(&self.rx_buf) as usize
     }
 
     fn consume(&mut self) -> Vec<u8> {
         let total_n = self.next_packet_len();
-        let out = self.rx_buf[2..][..total_n].to_vec();
-        self.rx_buf = self.rx_buf[2..][total_n..].to_vec();
+        let out = self.rx_buf[4..][..total_n].to_vec();
+        self.rx_buf = self.rx_buf[4..][total_n..].to_vec();
         out
     }
 }
@@ -61,8 +61,8 @@ where
 {
     fn send<'a>(&'a mut self, data: &'a [u8]) -> LocalBoxFuture<'a, Result<(), P::Error>> {
         async move {
-            let mut packet = vec![0; 2];
-            BigEndian::write_u16(&mut packet, data.len() as u16);
+            let mut packet = vec![0; 4];
+            BigEndian::write_u32(&mut packet, data.len() as u32);
             packet.extend(data);
             self.send_packet(&packet).await?;
 
