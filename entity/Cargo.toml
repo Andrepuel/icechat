@@ -4,4 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+futures = "0.3.26"
 sea-orm = { version = "0.11.0", features = ["macros"] }
+
+[dev-dependencies]
+tokio = { version = "1.25", features = ["macros", "rt"] }

@@ -5,6 +5,7 @@ pub mod prelude;
 pub mod channel;
 pub mod contact;
 pub mod conversation;
+pub mod crdt;
 pub mod initial_sync;
 pub mod key;
 pub mod local;

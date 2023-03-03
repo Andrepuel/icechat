@@ -1245,7 +1245,9 @@ dependencies = [
 name = "entity"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "sea-orm",
+ "tokio",
 ]
 
 [[package]]
@@ -1883,7 +1885,6 @@ dependencies = [
  "rfd",
  "ring",
  "rstest",
- "sea-orm",
  "serde",
  "thiserror",
  "tokio",
