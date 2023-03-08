@@ -12,7 +12,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Key::Table)
                     .col_id()
-                    .col(ColumnDef::new(Key::Public).string().not_null())
+                    .col(ColumnDef::new(Key::Public).string().not_null().unique_key())
                     .to_owned(),
             )
             .await?;

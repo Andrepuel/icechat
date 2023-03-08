@@ -1,3 +1,7 @@
+pub mod contact;
+pub mod conversation;
+pub mod message;
+
 use futures::{future::LocalBoxFuture, FutureExt};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
