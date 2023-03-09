@@ -2,37 +2,38 @@ use super::{Author, CrdtValue, CrdtValueTransaction};
 use crate::entity::contact;
 use futures::{future::LocalBoxFuture, FutureExt};
 use sea_orm::{
-    ActiveModelTrait, DatabaseTransaction, EntityTrait, IntoActiveModel, PaginatorTrait,
+    ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, IntoActiveModel,
+    PaginatorTrait,
 };
 
-impl CrdtValue for contact::Model {
+impl CrdtValue for contact::ActiveModel {
     type Id = i32;
 
     fn id(&self) -> Self::Id {
-        self.key
+        self.key.clone().unwrap()
     }
 
     fn generation(&self) -> i32 {
-        self.crdt_generation
+        self.crdt_generation.clone().unwrap()
     }
 
     fn set_generation(&mut self, gen: i32) {
-        self.crdt_generation = gen;
+        self.crdt_generation = ActiveValue::Set(gen);
     }
 
     fn author(&self) -> Author {
-        Author(self.crdt_author)
+        Author(self.crdt_author.clone().unwrap())
     }
 
     fn set_author(&mut self, author: Author) {
-        self.crdt_author = author.0
+        self.crdt_author = ActiveValue::Set(author.0)
     }
 }
 
-impl CrdtValueTransaction<contact::Model> for DatabaseTransaction {
-    fn save(&mut self, value: contact::Model) -> LocalBoxFuture<'_, contact::Model> {
+impl CrdtValueTransaction<contact::ActiveModel> for DatabaseTransaction {
+    fn save(&mut self, value: contact::ActiveModel) -> LocalBoxFuture<'_, contact::ActiveModel> {
         async move {
-            let exists = contact::Entity::find_by_id(value.key)
+            let exists = contact::Entity::find_by_id(value.id())
                 .count(self)
                 .await
                 .unwrap();
@@ -45,12 +46,19 @@ impl CrdtValueTransaction<contact::Model> for DatabaseTransaction {
                 active.insert(self).await.unwrap()
             };
 
-            value
+            value.into_active_model()
         }
         .boxed_local()
     }
 
-    fn existent(&mut self, key: i32) -> LocalBoxFuture<'_, Option<contact::Model>> {
-        async move { contact::Entity::find_by_id(key).one(self).await.unwrap() }.boxed_local()
+    fn existent(&mut self, key: i32) -> LocalBoxFuture<'_, Option<contact::ActiveModel>> {
+        async move {
+            contact::Entity::find_by_id(key)
+                .one(self)
+                .await
+                .unwrap()
+                .map(IntoActiveModel::into_active_model)
+        }
+        .boxed_local()
     }
 }

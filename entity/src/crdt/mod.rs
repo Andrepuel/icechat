@@ -1,10 +1,12 @@
 pub mod contact;
 pub mod conversation;
+pub mod member;
 pub mod message;
 
 use futures::{future::LocalBoxFuture, FutureExt};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct Author(pub i32);
 
 pub trait CrdtValue: Sized {

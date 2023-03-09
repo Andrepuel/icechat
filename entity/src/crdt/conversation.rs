@@ -9,7 +9,7 @@ use sea_orm::{
 };
 use uuid::Uuid;
 
-impl CrdtValue for conversation::Model {
+impl CrdtValue for conversation::ActiveModel {
     type Id = Uuid;
 
     fn id(&self) -> Self::Id {
@@ -17,46 +17,43 @@ impl CrdtValue for conversation::Model {
     }
 
     fn generation(&self) -> i32 {
-        self.crdt_generation
+        self.crdt_generation.clone().unwrap()
     }
 
     fn set_generation(&mut self, gen: i32) {
-        self.crdt_generation = gen;
+        self.crdt_generation = ActiveValue::Set(gen);
     }
 
     fn author(&self) -> Author {
-        Author(self.crdt_author)
+        Author(self.crdt_author.clone().unwrap())
     }
 
     fn set_author(&mut self, author: Author) {
-        self.crdt_author = author.0;
+        self.crdt_author = ActiveValue::Set(author.0);
     }
 }
 
-impl CrdtValueTransaction<conversation::Model> for DatabaseTransaction {
-    fn save(&mut self, value: conversation::Model) -> LocalBoxFuture<'_, conversation::Model> {
+impl CrdtValueTransaction<conversation::ActiveModel> for DatabaseTransaction {
+    fn save(
+        &mut self,
+        mut active: conversation::ActiveModel,
+    ) -> LocalBoxFuture<'_, conversation::ActiveModel> {
         async move {
-            let exists: Option<conversation::Model> = self.existent(value.id()).await;
+            let exists: Option<conversation::ActiveModel> = self.existent(active.id()).await;
 
-            let mut active = value.into_active_model();
-
-            let model = if let Some(exists) = exists {
-                active.id = ActiveValue::Unchanged(exists.id);
-                active.update(self).await.unwrap()
-            } else {
-                active.id = ActiveValue::NotSet;
-                active.insert(self).await.unwrap()
+            if let Some(exists) = exists {
+                active.id = exists.id;
             };
 
-            model
+            active.save(self).await.unwrap()
         }
         .boxed_local()
     }
 
     fn existent(
         &mut self,
-        id: <conversation::Model as CrdtValue>::Id,
-    ) -> LocalBoxFuture<'_, Option<conversation::Model>> {
+        id: <conversation::ActiveModel as CrdtValue>::Id,
+    ) -> LocalBoxFuture<'_, Option<conversation::ActiveModel>> {
         async move {
             let uuid_filter = SplitUuid::from(id).to_filter::<conversation::Column>();
 
@@ -68,6 +65,7 @@ impl CrdtValueTransaction<conversation::Model> for DatabaseTransaction {
                 .one(self)
                 .await
                 .unwrap()
+                .map(IntoActiveModel::into_active_model)
         }
         .boxed_local()
     }
