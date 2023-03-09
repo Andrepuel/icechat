@@ -27,10 +27,14 @@ impl CrdtValue for member::ActiveModel {
 }
 
 impl CrdtValueTransaction<member::ActiveModel> for DatabaseTransaction {
-    fn save(&mut self, value: member::ActiveModel) -> LocalBoxFuture<'_, member::ActiveModel> {
-        async move {
-            let existent: Option<member::ActiveModel> = self.existent(value.id()).await;
+    type RowId = (i32, i32);
 
+    fn save(
+        &mut self,
+        value: member::ActiveModel,
+        existent: Option<(Self::RowId, member::ActiveModel)>,
+    ) -> LocalBoxFuture<'_, member::ActiveModel> {
+        async move {
             if existent.is_none() {
                 value.clone().insert(self).await.unwrap();
             }
@@ -43,13 +47,16 @@ impl CrdtValueTransaction<member::ActiveModel> for DatabaseTransaction {
     fn existent(
         &mut self,
         id: <member::ActiveModel as CrdtValue>::Id,
-    ) -> LocalBoxFuture<'_, Option<member::ActiveModel>> {
+    ) -> LocalBoxFuture<'_, Option<(Self::RowId, member::ActiveModel)>> {
         async move {
             member::Entity::find_by_id(id)
                 .one(self)
                 .await
                 .unwrap()
-                .map(IntoActiveModel::into_active_model)
+                .map(|model| {
+                    let id = (model.contact, model.conversation);
+                    (id, model.into_active_model())
+                })
         }
         .boxed_local()
     }

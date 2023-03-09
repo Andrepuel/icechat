@@ -18,7 +18,7 @@ pub trait CrdtValue: Sized {
     fn author(&self) -> Author;
     fn set_author(&mut self, author: Author);
 
-    fn merge(self, existent: Option<Self>) -> Option<Self> {
+    fn merge(self, existent: Option<&Self>) -> Option<Self> {
         let Some(existent) = existent else { return Some(self) };
 
         if (self.generation(), self.author()) > (existent.generation(), existent.author()) {
@@ -30,34 +30,41 @@ pub trait CrdtValue: Sized {
 }
 
 pub trait CrdtValueTransaction<V: CrdtValue + 'static> {
+    type RowId;
+
     fn add(&mut self, author: Author, mut value: V) -> LocalBoxFuture<'_, V> {
         async move {
             value.set_author(author);
-            let gen = self
-                .existent(value.id())
-                .await
-                .map(|existent| existent.generation())
+            let existent = self.existent(value.id()).await;
+
+            let gen = existent
+                .as_ref()
+                .map(|(_, existent)| existent.generation())
                 .unwrap_or(0)
                 + 1;
             value.set_generation(gen);
 
-            self.save(value).await
+            self.save(value, existent).await
         }
         .boxed_local()
     }
 
     fn merge(&mut self, value: V) -> LocalBoxFuture<'_, Option<V>> {
         async move {
-            let existent = self.existent(value.id()).await;
+            let existent_rowid = self.existent(value.id()).await;
+            let existent = existent_rowid.as_ref().map(|(_, existent)| existent);
             let value = value.merge(existent)?;
 
-            Some(self.save(value).await)
+            Some(self.save(value, existent_rowid).await)
         }
         .boxed_local()
     }
 
-    fn save(&mut self, value: V) -> LocalBoxFuture<'_, V>;
-    fn existent(&mut self, id: <V as CrdtValue>::Id) -> LocalBoxFuture<'_, Option<V>>;
+    fn save(&mut self, value: V, existent: Option<(Self::RowId, V)>) -> LocalBoxFuture<'_, V>;
+    fn existent(
+        &mut self,
+        id: <V as CrdtValue>::Id,
+    ) -> LocalBoxFuture<'_, Option<(Self::RowId, V)>>;
 }
 
 #[cfg(test)]
@@ -100,12 +107,12 @@ pub mod tests {
     where
         V::Id: Eq,
     {
-        fn save(&mut self, value: V) -> LocalBoxFuture<'_, V> {
-            async move {
-                let existent = self.0.iter_mut().find(|x| x.id() == value.id());
+        type RowId = usize;
 
+        fn save(&mut self, value: V, existent: Option<(usize, V)>) -> LocalBoxFuture<'_, V> {
+            async move {
                 match existent {
-                    Some(existent) => *existent = value.clone(),
+                    Some((idx, _)) => self.0[idx] = value.clone(),
                     None => self.0.push(value.clone()),
                 }
 
@@ -114,8 +121,15 @@ pub mod tests {
             .boxed_local()
         }
 
-        fn existent(&mut self, id: V::Id) -> LocalBoxFuture<'_, Option<V>> {
-            async move { self.0.iter_mut().find(|x| x.id() == id).cloned() }.boxed_local()
+        fn existent(&mut self, id: V::Id) -> LocalBoxFuture<'_, Option<(usize, V)>> {
+            async move {
+                self.0
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(_, x)| x.id() == id)
+                    .map(|(idx, v)| (idx, v.clone()))
+            }
+            .boxed_local()
         }
     }
 
@@ -133,7 +147,7 @@ pub mod tests {
         fn if_the_element_is_same_nothing_is_done() {
             let my_value = CrdtValueMock(0, 0, 0);
 
-            assert_eq!(my_value.merge(Some(my_value)), None);
+            assert_eq!(my_value.merge(Some(&my_value)), None);
         }
 
         #[test]
@@ -141,8 +155,8 @@ pub mod tests {
             let bigger_gen = CrdtValueMock(0, 10, 100);
             let smaller_gen = CrdtValueMock(0, 9, 1);
 
-            assert_eq!(bigger_gen.merge(Some(smaller_gen)), Some(bigger_gen));
-            assert_eq!(smaller_gen.merge(Some(bigger_gen)), None);
+            assert_eq!(bigger_gen.merge(Some(&smaller_gen)), Some(bigger_gen));
+            assert_eq!(smaller_gen.merge(Some(&bigger_gen)), None);
         }
 
         #[test]
@@ -151,10 +165,10 @@ pub mod tests {
             let smaller_author = CrdtValueMock(0, 0, 10);
 
             assert_eq!(
-                bigger_author.merge(Some(smaller_author)),
+                bigger_author.merge(Some(&smaller_author)),
                 Some(bigger_author)
             );
-            assert_eq!(smaller_author.merge(Some(bigger_author)), None);
+            assert_eq!(smaller_author.merge(Some(&bigger_author)), None);
         }
     }
 

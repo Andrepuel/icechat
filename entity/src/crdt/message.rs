@@ -34,14 +34,18 @@ impl CrdtValue for message::ActiveModel {
 }
 
 impl CrdtValueTransaction<message::ActiveModel> for DatabaseTransaction {
-    fn save(&mut self, value: message::ActiveModel) -> LocalBoxFuture<'_, message::ActiveModel> {
-        async move {
-            let existent: Option<message::ActiveModel> = self.existent(value.id()).await;
+    type RowId = i32;
 
+    fn save(
+        &mut self,
+        value: message::ActiveModel,
+        existent: Option<(i32, message::ActiveModel)>,
+    ) -> LocalBoxFuture<'_, message::ActiveModel> {
+        async move {
             let mut active = value.into_active_model();
 
-            if let Some(existent) = existent {
-                active.id = existent.id;
+            if let Some((id, _)) = existent {
+                active.id = ActiveValue::Unchanged(id);
             };
 
             active.save(self).await.unwrap()
@@ -52,7 +56,7 @@ impl CrdtValueTransaction<message::ActiveModel> for DatabaseTransaction {
     fn existent(
         &mut self,
         id: <message::ActiveModel as CrdtValue>::Id,
-    ) -> LocalBoxFuture<'_, Option<message::ActiveModel>> {
+    ) -> LocalBoxFuture<'_, Option<(i32, message::ActiveModel)>> {
         async move {
             let uuid_filter = SplitUuid::from(id).to_filter::<message::Column>();
 
@@ -64,7 +68,11 @@ impl CrdtValueTransaction<message::ActiveModel> for DatabaseTransaction {
                 .one(self)
                 .await
                 .unwrap()
-                .map(IntoActiveModel::into_active_model)
+                .map(|model| {
+                    let id = model.id;
+
+                    (id, model.into_active_model())
+                })
         }
         .boxed_local()
     }

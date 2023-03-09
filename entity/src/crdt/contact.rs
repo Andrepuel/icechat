@@ -1,10 +1,7 @@
 use super::{Author, CrdtValue, CrdtValueTransaction};
 use crate::entity::contact;
 use futures::{future::LocalBoxFuture, FutureExt};
-use sea_orm::{
-    ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, IntoActiveModel,
-    PaginatorTrait,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, IntoActiveModel};
 
 impl CrdtValue for contact::ActiveModel {
     type Id = i32;
@@ -31,19 +28,17 @@ impl CrdtValue for contact::ActiveModel {
 }
 
 impl CrdtValueTransaction<contact::ActiveModel> for DatabaseTransaction {
-    fn save(&mut self, value: contact::ActiveModel) -> LocalBoxFuture<'_, contact::ActiveModel> {
-        async move {
-            let exists = contact::Entity::find_by_id(value.id())
-                .count(self)
-                .await
-                .unwrap();
-            let exists = exists > 0;
-            let active = value.into_active_model();
+    type RowId = i32;
 
-            let value = if exists {
-                active.update(self).await.unwrap()
-            } else {
-                active.insert(self).await.unwrap()
+    fn save(
+        &mut self,
+        active: contact::ActiveModel,
+        existent: Option<(i32, contact::ActiveModel)>,
+    ) -> LocalBoxFuture<'_, contact::ActiveModel> {
+        async move {
+            let value = match existent {
+                Some(_) => active.update(self).await.unwrap(),
+                None => active.insert(self).await.unwrap(),
             };
 
             value.into_active_model()
@@ -51,13 +46,16 @@ impl CrdtValueTransaction<contact::ActiveModel> for DatabaseTransaction {
         .boxed_local()
     }
 
-    fn existent(&mut self, key: i32) -> LocalBoxFuture<'_, Option<contact::ActiveModel>> {
+    fn existent(&mut self, key: i32) -> LocalBoxFuture<'_, Option<(i32, contact::ActiveModel)>> {
         async move {
             contact::Entity::find_by_id(key)
                 .one(self)
                 .await
                 .unwrap()
-                .map(IntoActiveModel::into_active_model)
+                .map(|model| {
+                    let id = model.key;
+                    (id, model.into_active_model())
+                })
         }
         .boxed_local()
     }
