@@ -1,16 +1,19 @@
 use super::{Author, CrdtValue, CrdtValueTransaction};
-use crate::entity::member;
+use crate::{
+    entity::member,
+    patch::{Contact, Conversation, Key, Member},
+};
 use futures::{future::LocalBoxFuture, FutureExt};
-use sea_orm::{ActiveModelTrait, DatabaseTransaction, EntityTrait, IntoActiveModel};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter,
+};
+use uuid::Uuid;
 
-impl CrdtValue for member::ActiveModel {
-    type Id = (i32, i32);
+impl CrdtValue for Member {
+    type Id = (Key, Uuid);
 
     fn id(&self) -> Self::Id {
-        (
-            self.contact.clone().unwrap(),
-            self.conversation.clone().unwrap(),
-        )
+        (self.key.clone(), self.conversation)
     }
 
     fn generation(&self) -> i32 {
@@ -26,17 +29,26 @@ impl CrdtValue for member::ActiveModel {
     fn set_author(&mut self, _author: Author) {}
 }
 
-impl CrdtValueTransaction<member::ActiveModel> for DatabaseTransaction {
+impl CrdtValueTransaction<Member> for DatabaseTransaction {
     type RowId = (i32, i32);
 
     fn save(
         &mut self,
-        value: member::ActiveModel,
-        existent: Option<(Self::RowId, member::ActiveModel)>,
-    ) -> LocalBoxFuture<'_, member::ActiveModel> {
+        value: Member,
+        existent: Option<(Self::RowId, Member)>,
+    ) -> LocalBoxFuture<'_, Member> {
         async move {
             if existent.is_none() {
-                value.clone().insert(self).await.unwrap();
+                let (_, contact) = Contact::get_or_create(value.key.clone(), self).await;
+                let conversation = Conversation::get_or_create(value.conversation, self).await;
+
+                member::ActiveModel {
+                    contact: ActiveValue::Set(contact.key),
+                    conversation: ActiveValue::Set(conversation.id),
+                }
+                .insert(self)
+                .await
+                .unwrap();
             }
 
             value
@@ -46,16 +58,21 @@ impl CrdtValueTransaction<member::ActiveModel> for DatabaseTransaction {
 
     fn existent(
         &mut self,
-        id: <member::ActiveModel as CrdtValue>::Id,
-    ) -> LocalBoxFuture<'_, Option<(Self::RowId, member::ActiveModel)>> {
+        id: <Member as CrdtValue>::Id,
+    ) -> LocalBoxFuture<'_, Option<(Self::RowId, Member)>> {
         async move {
-            member::Entity::find_by_id(id)
+            let (key, contact) = Contact::get_or_create(id.0, self).await;
+            let conversation = Conversation::get_or_create(id.1, self).await;
+
+            member::Entity::find()
+                .filter(member::Column::Contact.eq(contact.key))
+                .filter(member::Column::Conversation.eq(conversation.id))
                 .one(self)
                 .await
                 .unwrap()
-                .map(|model| {
+                .map(move |model| {
                     let id = (model.contact, model.conversation);
-                    (id, model.into_active_model())
+                    (id, (key, conversation).into())
                 })
         }
         .boxed_local()

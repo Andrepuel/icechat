@@ -1,12 +1,12 @@
+use std::ops::Deref;
+
 use crate::{
-    crdt::{Author, CrdtValue},
-    entity::{contact, conversation, key, member, message},
-    uuid::SplitUuid,
+    crdt::{Author, CrdtValueTransaction},
+    entity::{contact, conversation, key, message},
+    uuid::{SplitUuid, UuidValue},
 };
-use futures::{future::LocalBoxFuture, FutureExt};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, PaginatorTrait,
-    QueryFilter,
+    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -16,61 +16,76 @@ pub enum Patch {
     Contact(Contact),
     Conversation(Conversation),
     Member(Member),
-    Message(Message),
+    NewMessage(NewMessage),
+    MessageStatus(MessageStatus),
 }
 impl Patch {
-    pub async fn to_crdt(&self, trans: &DatabaseTransaction) -> Result<PatchCrdt, PatchError> {
-        Ok(match self {
-            Patch::Contact(value) => PatchCrdt::Contact(value.to_crdt(trans).await?),
-            Patch::Conversation(value) => PatchCrdt::Conversation(value.to_crdt(trans).await?),
-            Patch::Member(value) => PatchCrdt::Member(value.to_crdt(trans).await?),
-            Patch::Message(value) => PatchCrdt::Message(value.to_crdt(trans).await?),
-        })
+    pub async fn merge(self, trans: &mut DatabaseTransaction) -> Option<Self> {
+        match self {
+            Patch::Contact(crdt) => trans.merge(crdt).await.map(Patch::Contact),
+            Patch::Conversation(crdt) => trans.merge(crdt).await.map(Patch::Conversation),
+            Patch::Member(crdt) => trans.merge(crdt).await.map(Patch::Member),
+            Patch::NewMessage(crdt) => trans.merge(crdt).await.map(Patch::NewMessage),
+            Patch::MessageStatus(crdt) => trans.merge(crdt).await.map(Patch::MessageStatus),
+        }
     }
-}
-
-#[derive(Debug)]
-pub enum PatchCrdt {
-    Contact(<Contact as PatchTrait>::Crdt),
-    Conversation(<Conversation as PatchTrait>::Crdt),
-    Member(<Member as PatchTrait>::Crdt),
-    Message(<Message as PatchTrait>::Crdt),
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum PatchError {
-    #[error(transparent)]
-    BadKey(#[from] BadKeyError),
-    #[error("Deserialization error")]
-    Deserialization,
-}
-
-pub trait PatchTrait {
-    type Crdt: CrdtValue;
-
-    fn to_crdt<'a>(
-        &'a self,
-        trans: &'a DatabaseTransaction,
-    ) -> LocalBoxFuture<'a, Result<Self::Crdt, PatchError>>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CrdtWritable {
-    author: Author,
-    generation: i32,
+    pub author: Author,
+    pub generation: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CrdtSequence(i32);
+pub struct CrdtSequence(pub i32);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CrdtAddOnly;
 
 pub const KEY_LENGTH: usize = 32;
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Key(pub Vec<u8>);
+#[derive(Clone, Debug)]
+pub struct Key(Vec<u8>);
+impl Default for Key {
+    fn default() -> Self {
+        Self(vec![0; KEY_LENGTH])
+    }
+}
+impl serde::Serialize for Key {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(&self.0, serializer)
+    }
+}
+impl<'de> serde::Deserialize<'de> for Key {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec = serde::Deserialize::deserialize(deserializer)?;
+
+        Key::new(vec).map_err(<D::Error as serde::de::Error>::custom)
+    }
+}
+impl Deref for Key {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_slice()
+    }
+}
 impl Key {
-    pub async fn get_foreign_key(&self, trans: &DatabaseTransaction) -> Result<i32, BadKeyError> {
+    pub fn new(key: Vec<u8>) -> Result<Self, BadKeyError> {
+        if key.len() != KEY_LENGTH {
+            return Err(BadKeyError);
+        }
+
+        Ok(Key(key))
+    }
+
+    pub async fn get_or_create(&self, trans: &DatabaseTransaction) -> key::Model {
         let existent = key::Entity::find()
             .filter(key::Column::Public.eq(self.0.clone()))
             .one(trans)
@@ -79,22 +94,16 @@ impl Key {
 
         let model = match existent {
             Some(existent) => existent,
-            None => {
-                if self.0.len() != KEY_LENGTH {
-                    return Err(BadKeyError);
-                }
-
-                key::ActiveModel {
-                    id: ActiveValue::NotSet,
-                    public: ActiveValue::Set(self.0.clone()),
-                }
-                .insert(trans)
-                .await
-                .unwrap()
+            None => key::ActiveModel {
+                id: ActiveValue::NotSet,
+                public: ActiveValue::Set(self.0.clone()),
             }
+            .insert(trans)
+            .await
+            .unwrap(),
         };
 
-        Ok(model.id)
+        model
     }
 }
 
@@ -104,87 +113,73 @@ pub struct BadKeyError;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Contact {
-    key: Key,
-    name: String,
-    crdt: CrdtWritable,
+    pub key: Key,
+    pub name: String,
+    pub crdt: CrdtWritable,
 }
-impl PatchTrait for Contact {
-    type Crdt = contact::ActiveModel;
-
-    fn to_crdt<'a>(
-        &'a self,
-        trans: &'a DatabaseTransaction,
-    ) -> LocalBoxFuture<'a, Result<Self::Crdt, PatchError>> {
-        async move {
-            let key = self.key.get_foreign_key(trans).await?;
-
-            Ok(contact::ActiveModel {
-                key: ActiveValue::Unchanged(key),
-                name: ActiveValue::Set(self.name.clone()),
-                crdt_generation: ActiveValue::Set(self.crdt.generation),
-                crdt_author: ActiveValue::Set(self.crdt.author.0),
-            })
+impl From<(key::Model, contact::Model)> for Contact {
+    fn from((key, value): (key::Model, contact::Model)) -> Self {
+        Contact {
+            key: Key::new(key.public).expect("Inconsistent database"),
+            name: value.name,
+            crdt: CrdtWritable {
+                author: Author(value.crdt_author),
+                generation: value.crdt_generation,
+            },
         }
-        .boxed_local()
     }
 }
 impl Contact {
-    pub async fn get_foreign_key(
+    pub async fn get_or_create(
         key: Key,
         trans: &DatabaseTransaction,
-    ) -> Result<i32, BadKeyError> {
-        let key = key.get_foreign_key(trans).await.unwrap();
+    ) -> (key::Model, contact::Model) {
+        let key = key.get_or_create(trans).await;
 
-        let count = contact::Entity::find_by_id(key).count(trans).await.unwrap();
+        let model = contact::Entity::find_by_id(key.id)
+            .one(trans)
+            .await
+            .unwrap();
 
-        if count == 0 {
-            contact::ActiveModel {
-                key: ActiveValue::Set(key),
+        let model = match model {
+            Some(model) => model,
+            None => contact::ActiveModel {
+                key: ActiveValue::Set(key.id),
                 name: ActiveValue::Set(Default::default()),
                 crdt_generation: ActiveValue::Set(0),
                 crdt_author: ActiveValue::Set(0),
             }
             .insert(trans)
             .await
-            .unwrap();
-        }
+            .unwrap(),
+        };
 
-        Ok(key)
+        (key, model)
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Conversation {
-    id: Uuid,
-    title: String,
-    crdt: CrdtWritable,
+    pub id: Uuid,
+    pub title: Option<String>,
+    pub crdt: CrdtWritable,
 }
-impl PatchTrait for Conversation {
-    type Crdt = conversation::ActiveModel;
+impl From<conversation::Model> for Conversation {
+    fn from(value: conversation::Model) -> Self {
+        let id = value.get_uuid();
 
-    fn to_crdt<'a>(
-        &'a self,
-        _trans: &'a DatabaseTransaction,
-    ) -> LocalBoxFuture<'a, Result<Self::Crdt, PatchError>> {
-        async move {
-            let id = SplitUuid::from(self.id);
-
-            Ok(conversation::ActiveModel {
-                id: ActiveValue::NotSet,
-                uuid0: ActiveValue::Set(id.0),
-                uuid1: ActiveValue::Set(id.1),
-                uuid2: ActiveValue::Set(id.2),
-                uuid3: ActiveValue::Set(id.3),
-                title: ActiveValue::Set(Some(self.title.clone())),
-                crdt_generation: ActiveValue::Set(self.crdt.generation),
-                crdt_author: ActiveValue::Set(self.crdt.author.0),
-            })
+        Conversation {
+            id: id.into(),
+            title: value.title,
+            crdt: CrdtWritable {
+                author: Author(value.crdt_author),
+                generation: value.crdt_generation,
+            },
         }
-        .boxed_local()
     }
 }
 impl Conversation {
-    pub async fn get_foreign_key(uuid: Uuid, trans: &DatabaseTransaction) -> i32 {
+    pub async fn get_or_create(uuid: Uuid, trans: &DatabaseTransaction) -> conversation::Model {
         let uuid = SplitUuid::from(uuid);
         let uuid_filter = uuid.to_filter::<conversation::Column>();
         let existent = conversation::Entity::find()
@@ -213,95 +208,78 @@ impl Conversation {
             .unwrap(),
         };
 
-        model.id
+        model
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Member {
-    key: Key,
-    conversation: Uuid,
-    crdt: CrdtAddOnly,
+    pub key: Key,
+    pub conversation: Uuid,
+    pub crdt: CrdtAddOnly,
 }
-impl PatchTrait for Member {
-    type Crdt = member::ActiveModel;
+impl From<(key::Model, conversation::Model)> for Member {
+    fn from((key, conversation): (key::Model, conversation::Model)) -> Self {
+        let conversation = conversation.get_uuid();
 
-    fn to_crdt<'a>(
-        &'a self,
-        trans: &'a DatabaseTransaction,
-    ) -> LocalBoxFuture<'a, Result<Self::Crdt, PatchError>> {
-        async move {
-            let contact = Contact::get_foreign_key(self.key.clone(), trans).await?;
-            let conversation = Conversation::get_foreign_key(self.conversation, trans).await;
-
-            Ok(member::ActiveModel {
-                contact: ActiveValue::Set(contact),
-                conversation: ActiveValue::Set(conversation),
-            })
+        Member {
+            key: Key::new(key.public).expect("Inconsistent database"),
+            conversation: conversation.into(),
+            crdt: CrdtAddOnly,
         }
-        .boxed_local()
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Message {
-    id: Uuid,
-    status: Option<i32>,
-    from: Option<Key>,
-    conversation: Option<Uuid>,
-    text: Option<String>,
-    crdt: CrdtWritable,
-    sequence: CrdtSequence,
+pub struct NewMessage {
+    pub id: Uuid,
+    pub from: Key,
+    pub conversation: Uuid,
+    pub text: String,
+    pub crdt: CrdtWritable,
+    pub sequence: CrdtSequence,
 }
-impl PatchTrait for Message {
-    type Crdt = message::ActiveModel;
+impl From<(message::Model, key::Model, conversation::Model)> for NewMessage {
+    fn from(
+        (message, fromm, conversation): (message::Model, key::Model, conversation::Model),
+    ) -> Self {
+        let id = message.get_uuid();
 
-    fn to_crdt<'a>(
-        &'a self,
-        trans: &'a DatabaseTransaction,
-    ) -> LocalBoxFuture<'a, Result<Self::Crdt, PatchError>> {
-        async move {
-            let id = SplitUuid::from(self.id);
+        let from = Key::new(fromm.public).expect("Inconsistent database");
 
-            let from = match self.from.clone() {
-                Some(from) => Some(Contact::get_foreign_key(from, trans).await?),
-                None => None,
-            };
+        let conversation = conversation.get_uuid();
 
-            let conversation = match self.conversation {
-                Some(conversation) => {
-                    Some(Conversation::get_foreign_key(conversation, trans).await)
-                }
-                None => None,
-            };
-
-            Ok(message::ActiveModel {
-                id: ActiveValue::NotSet,
-                uuid0: ActiveValue::Set(id.0),
-                uuid1: ActiveValue::Set(id.1),
-                uuid2: ActiveValue::Set(id.2),
-                uuid3: ActiveValue::Set(id.3),
-                status: match self.status {
-                    Some(status) => ActiveValue::Set(status),
-                    None => ActiveValue::NotSet,
-                },
-                from: match from {
-                    Some(from) => ActiveValue::Set(from),
-                    None => ActiveValue::NotSet,
-                },
-                conversation: match conversation {
-                    Some(conversation) => ActiveValue::Set(conversation),
-                    None => ActiveValue::NotSet,
-                },
-                text: match self.text.clone() {
-                    Some(text) => ActiveValue::Set(text),
-                    None => ActiveValue::NotSet,
-                },
-                crdt_generation: ActiveValue::Set(self.crdt.generation),
-                crdt_author: ActiveValue::Set(self.crdt.author.0),
-                crdt_sequence: ActiveValue::Set(self.sequence.0),
-            })
+        NewMessage {
+            id: id.into(),
+            from,
+            conversation: conversation.into(),
+            text: message.text,
+            crdt: CrdtWritable {
+                author: Author(message.crdt_author),
+                generation: message.crdt_generation,
+            },
+            sequence: CrdtSequence(message.crdt_sequence),
         }
-        .boxed_local()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MessageStatus {
+    pub id: Uuid,
+    pub status: i32,
+    pub crdt: CrdtWritable,
+}
+impl From<message::Model> for MessageStatus {
+    fn from(value: message::Model) -> Self {
+        let id = value.get_uuid();
+
+        MessageStatus {
+            id: id.into(),
+            status: value.status,
+            crdt: CrdtWritable {
+                author: Author(value.crdt_author),
+                generation: value.crdt_generation,
+            },
+        }
     }
 }

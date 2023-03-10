@@ -87,13 +87,13 @@ impl UuidColumn for conversation::Column {
         ]
     }
 }
-impl UuidValue for conversation::ActiveModel {
+impl UuidValue for conversation::Model {
     fn get_uuid(&self) -> SplitUuid {
         SplitUuid(
-            self.uuid0.clone().unwrap(),
-            self.uuid1.clone().unwrap(),
-            self.uuid2.clone().unwrap(),
-            self.uuid3.clone().unwrap(),
+            self.uuid0,
+            self.uuid1,
+            self.uuid2,
+            self.uuid3,
         )
     }
 }
@@ -108,13 +108,13 @@ impl UuidColumn for message::Column {
         ]
     }
 }
-impl UuidValue for message::ActiveModel {
+impl UuidValue for message::Model {
     fn get_uuid(&self) -> SplitUuid {
         SplitUuid(
-            self.uuid0.clone().unwrap(),
-            self.uuid1.clone().unwrap(),
-            self.uuid2.clone().unwrap(),
-            self.uuid3.clone().unwrap(),
+            self.uuid0,
+            self.uuid1,
+            self.uuid2,
+            self.uuid3,
         )
     }
 }

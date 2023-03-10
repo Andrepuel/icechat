@@ -1,60 +1,78 @@
 use super::{Author, CrdtValue, CrdtValueTransaction};
-use crate::{
-    entity::conversation,
-    uuid::{SplitUuid, UuidValue},
-};
+use crate::{entity::conversation, patch::Conversation, uuid::SplitUuid};
 use futures::{future::LocalBoxFuture, FutureExt};
-use sea_orm::{
-    ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, QueryFilter};
 use uuid::Uuid;
 
-impl CrdtValue for conversation::ActiveModel {
+impl CrdtValue for Conversation {
     type Id = Uuid;
 
     fn id(&self) -> Self::Id {
-        self.get_uuid().into()
+        self.id
     }
 
     fn generation(&self) -> i32 {
-        self.crdt_generation.clone().unwrap()
+        self.crdt.generation
     }
 
     fn set_generation(&mut self, gen: i32) {
-        self.crdt_generation = ActiveValue::Set(gen);
+        self.crdt.generation = gen;
     }
 
     fn author(&self) -> Author {
-        Author(self.crdt_author.clone().unwrap())
+        self.crdt.author
     }
 
     fn set_author(&mut self, author: Author) {
-        self.crdt_author = ActiveValue::Set(author.0);
+        self.crdt.author = author;
     }
 }
 
-impl CrdtValueTransaction<conversation::ActiveModel> for DatabaseTransaction {
+impl CrdtValueTransaction<Conversation> for DatabaseTransaction {
     type RowId = i32;
 
     fn save(
         &mut self,
-        mut active: conversation::ActiveModel,
-        existent: Option<(i32, conversation::ActiveModel)>,
-    ) -> LocalBoxFuture<'_, conversation::ActiveModel> {
+        conversation: Conversation,
+        existent: Option<(i32, Conversation)>,
+    ) -> LocalBoxFuture<'_, Conversation> {
         async move {
-            if let Some((id, _)) = existent {
-                active.id = ActiveValue::Unchanged(id);
+            let mut active = conversation::ActiveModel {
+                id: ActiveValue::NotSet,
+                uuid0: ActiveValue::NotSet,
+                uuid1: ActiveValue::NotSet,
+                uuid2: ActiveValue::NotSet,
+                uuid3: ActiveValue::NotSet,
+                title: ActiveValue::Set(conversation.title.clone()),
+                crdt_generation: ActiveValue::Set(conversation.crdt.generation),
+                crdt_author: ActiveValue::Set(conversation.crdt.author.0),
             };
 
-            active.save(self).await.unwrap()
+            match existent {
+                Some((id, _)) => {
+                    active.id = ActiveValue::Unchanged(id);
+                }
+                None => {
+                    let uuid = SplitUuid::from(conversation.id);
+
+                    active.uuid0 = ActiveValue::Set(uuid.0);
+                    active.uuid1 = ActiveValue::Set(uuid.1);
+                    active.uuid2 = ActiveValue::Set(uuid.2);
+                    active.uuid3 = ActiveValue::Set(uuid.3);
+                }
+            }
+
+            active.save(self).await.unwrap();
+
+            conversation
         }
         .boxed_local()
     }
 
     fn existent(
         &mut self,
-        id: <conversation::ActiveModel as CrdtValue>::Id,
-    ) -> LocalBoxFuture<'_, Option<(i32, conversation::ActiveModel)>> {
+        id: <Conversation as CrdtValue>::Id,
+    ) -> LocalBoxFuture<'_, Option<(i32, Conversation)>> {
         async move {
             let uuid_filter = SplitUuid::from(id).to_filter::<conversation::Column>();
 
@@ -68,7 +86,7 @@ impl CrdtValueTransaction<conversation::ActiveModel> for DatabaseTransaction {
                 .unwrap()
                 .map(|model| {
                     let id = model.id;
-                    (id, model.into_active_model())
+                    (id, model.into())
                 })
         }
         .boxed_local()
