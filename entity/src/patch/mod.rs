@@ -9,10 +9,7 @@ pub use self::{
     member::Member,
     message::{MessageStatus, NewMessage},
 };
-use crate::{
-    crdt::{Author, CrdtValueTransaction},
-    entity::key,
-};
+use crate::{crdt::CrdtValueTransaction, entity::key};
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter,
 };
@@ -38,18 +35,6 @@ impl Patch {
         }
     }
 }
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CrdtWritable {
-    pub author: Author,
-    pub generation: i32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CrdtSequence(pub i32);
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CrdtAddOnly;
 
 pub const KEY_LENGTH: usize = 32;
 #[derive(Clone, Debug)]

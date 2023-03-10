@@ -6,26 +6,65 @@ pub mod message;
 use futures::{future::LocalBoxFuture, FutureExt};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct Author(pub i32);
 
 pub trait CrdtValue: Sized {
     type Id;
+    type Crdt: CrdtOrd;
 
     fn id(&self) -> Self::Id;
-    fn generation(&self) -> i32;
-    fn set_generation(&mut self, gen: i32);
-    fn author(&self) -> Author;
-    fn set_author(&mut self, author: Author);
+    fn crdt(&self) -> Self::Crdt;
+    fn set_crdt(&mut self, crdt: Self::Crdt);
 
     fn merge(self, existent: Option<&Self>) -> Option<Self> {
         let Some(existent) = existent else { return Some(self) };
 
-        if (self.generation(), self.author()) > (existent.generation(), existent.author()) {
+        if self.crdt() > existent.crdt() {
             Some(self)
         } else {
             None
         }
+    }
+}
+
+pub trait CrdtOrd: Ord + Default + Sized {
+    fn next(&self, author: Author) -> Self;
+}
+
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CrdtWritable {
+    pub generation: i32,
+    pub author: Author,
+}
+impl CrdtOrd for CrdtWritable {
+    fn next(&self, author: Author) -> Self {
+        CrdtWritable {
+            author,
+            generation: self.generation + 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CrdtWritableSequence {
+    pub writable: CrdtWritable,
+    pub sequence: i32,
+}
+impl CrdtOrd for CrdtWritableSequence {
+    fn next(&self, author: Author) -> Self {
+        CrdtWritableSequence {
+            writable: self.writable.next(author),
+            sequence: self.sequence,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CrdtAddOnly;
+impl CrdtOrd for CrdtAddOnly {
+    fn next(&self, _author: Author) -> Self {
+        CrdtAddOnly
     }
 }
 
@@ -34,15 +73,13 @@ pub trait CrdtValueTransaction<V: CrdtValue + 'static> {
 
     fn add(&mut self, author: Author, mut value: V) -> LocalBoxFuture<'_, V> {
         async move {
-            value.set_author(author);
             let existent = self.existent(value.id()).await;
-
-            let gen = existent
+            let existent_crdt = existent
                 .as_ref()
-                .map(|(_, existent)| existent.generation())
-                .unwrap_or(0)
-                + 1;
-            value.set_generation(gen);
+                .map(|(_, existent)| existent.crdt())
+                .unwrap_or_default();
+
+            value.set_crdt(existent_crdt.next(author));
 
             self.save(value, existent).await
         }
@@ -75,25 +112,22 @@ pub mod tests {
     struct CrdtValueMock(usize, i32, i32);
     impl CrdtValue for CrdtValueMock {
         type Id = usize;
+        type Crdt = CrdtWritable;
 
         fn id(&self) -> Self::Id {
             0
         }
 
-        fn generation(&self) -> i32 {
-            self.1
+        fn crdt(&self) -> Self::Crdt {
+            CrdtWritable {
+                author: Author(self.2),
+                generation: self.1,
+            }
         }
 
-        fn set_generation(&mut self, gen: i32) {
-            self.1 = gen;
-        }
-
-        fn author(&self) -> Author {
-            Author(self.2)
-        }
-
-        fn set_author(&mut self, author: Author) {
-            self.2 = author.0;
+        fn set_crdt(&mut self, crdt: CrdtWritable) {
+            self.1 = crdt.generation;
+            self.2 = crdt.author.0;
         }
     }
 
@@ -152,8 +186,8 @@ pub mod tests {
 
         #[test]
         fn the_bigger_generation_will_wins_the_merge() {
-            let bigger_gen = CrdtValueMock(0, 10, 100);
-            let smaller_gen = CrdtValueMock(0, 9, 1);
+            let bigger_gen = CrdtValueMock(0, 10, 1);
+            let smaller_gen = CrdtValueMock(0, 9, 100);
 
             assert_eq!(bigger_gen.merge(Some(&smaller_gen)), Some(bigger_gen));
             assert_eq!(smaller_gen.merge(Some(&bigger_gen)), None);

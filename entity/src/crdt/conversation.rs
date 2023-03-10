@@ -1,4 +1,4 @@
-use super::{Author, CrdtValue, CrdtValueTransaction};
+use super::{CrdtValue, CrdtValueTransaction, CrdtWritable};
 use crate::{entity::conversation, patch::Conversation, uuid::SplitUuid};
 use futures::{future::LocalBoxFuture, FutureExt};
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, QueryFilter};
@@ -6,25 +6,18 @@ use uuid::Uuid;
 
 impl CrdtValue for Conversation {
     type Id = Uuid;
+    type Crdt = CrdtWritable;
 
     fn id(&self) -> Self::Id {
         self.id
     }
 
-    fn generation(&self) -> i32 {
-        self.crdt.generation
+    fn crdt(&self) -> Self::Crdt {
+        self.crdt
     }
 
-    fn set_generation(&mut self, gen: i32) {
-        self.crdt.generation = gen;
-    }
-
-    fn author(&self) -> Author {
-        self.crdt.author
-    }
-
-    fn set_author(&mut self, author: Author) {
-        self.crdt.author = author;
+    fn set_crdt(&mut self, crdt: Self::Crdt) {
+        self.crdt = crdt;
     }
 }
 

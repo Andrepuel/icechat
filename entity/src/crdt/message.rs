@@ -1,4 +1,4 @@
-use super::{Author, CrdtValue, CrdtValueTransaction};
+use super::{CrdtValue, CrdtValueTransaction, CrdtWritable, CrdtWritableSequence};
 use crate::{
     entity::{conversation, key, message},
     patch::{Contact, Conversation, Key, MessageStatus, NewMessage},
@@ -10,25 +10,18 @@ use uuid::Uuid;
 
 impl CrdtValue for NewMessage {
     type Id = Uuid;
+    type Crdt = CrdtWritableSequence;
 
     fn id(&self) -> Self::Id {
         self.id
     }
 
-    fn generation(&self) -> i32 {
-        self.crdt.generation
+    fn crdt(&self) -> Self::Crdt {
+        self.crdt
     }
 
-    fn set_generation(&mut self, gen: i32) {
-        self.crdt.generation = gen;
-    }
-
-    fn author(&self) -> Author {
-        self.crdt.author
-    }
-
-    fn set_author(&mut self, author: Author) {
-        self.crdt.author = author;
+    fn set_crdt(&mut self, crdt: Self::Crdt) {
+        self.crdt = crdt;
     }
 }
 
@@ -54,9 +47,9 @@ impl CrdtValueTransaction<NewMessage> for DatabaseTransaction {
                 from: ActiveValue::Set(from.id),
                 conversation: ActiveValue::Set(conversation.id),
                 text: ActiveValue::Set(message.text.clone()),
-                crdt_generation: ActiveValue::Set(message.crdt.generation),
-                crdt_author: ActiveValue::Set(message.crdt.author.0),
-                crdt_sequence: ActiveValue::Set(message.sequence.0),
+                crdt_generation: ActiveValue::Set(message.crdt.writable.generation),
+                crdt_author: ActiveValue::Set(message.crdt.writable.author.0),
+                crdt_sequence: ActiveValue::Set(message.crdt.sequence),
             };
 
             match existent {
@@ -118,25 +111,18 @@ impl CrdtValueTransaction<NewMessage> for DatabaseTransaction {
 
 impl CrdtValue for MessageStatus {
     type Id = Uuid;
+    type Crdt = CrdtWritable;
 
     fn id(&self) -> Self::Id {
         self.id
     }
 
-    fn generation(&self) -> i32 {
-        self.crdt.generation
+    fn crdt(&self) -> Self::Crdt {
+        self.crdt
     }
 
-    fn set_generation(&mut self, gen: i32) {
-        self.crdt.generation = gen;
-    }
-
-    fn author(&self) -> Author {
-        self.crdt.author
-    }
-
-    fn set_author(&mut self, author: Author) {
-        self.crdt.author = author;
+    fn set_crdt(&mut self, crdt: Self::Crdt) {
+        self.crdt = crdt;
     }
 }
 

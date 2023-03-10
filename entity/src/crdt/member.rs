@@ -1,4 +1,4 @@
-use super::{Author, CrdtValue, CrdtValueTransaction};
+use super::{CrdtAddOnly, CrdtValue, CrdtValueTransaction};
 use crate::{
     entity::member,
     patch::{Contact, Conversation, Key, Member},
@@ -11,22 +11,17 @@ use uuid::Uuid;
 
 impl CrdtValue for Member {
     type Id = (Key, Uuid);
+    type Crdt = CrdtAddOnly;
 
     fn id(&self) -> Self::Id {
         (self.key.clone(), self.conversation)
     }
 
-    fn generation(&self) -> i32 {
-        0
+    fn crdt(&self) -> Self::Crdt {
+        CrdtAddOnly
     }
 
-    fn set_generation(&mut self, _gen: i32) {}
-
-    fn author(&self) -> Author {
-        Author(0)
-    }
-
-    fn set_author(&mut self, _author: Author) {}
+    fn set_crdt(&mut self, _crdt: Self::Crdt) {}
 }
 
 impl CrdtValueTransaction<Member> for DatabaseTransaction {

@@ -1,5 +1,6 @@
-use super::{CrdtAddOnly, Key};
+use super::Key;
 use crate::{
+    crdt::CrdtAddOnly,
     entity::{conversation, key},
     uuid::UuidValue,
 };

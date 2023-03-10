@@ -1,6 +1,6 @@
-use super::{CrdtSequence, CrdtWritable, Key};
+use super::Key;
 use crate::{
-    crdt::Author,
+    crdt::{Author, CrdtWritable, CrdtWritableSequence},
     entity::{conversation, key, message},
     uuid::UuidValue,
 };
@@ -13,8 +13,7 @@ pub struct NewMessage {
     pub from: Key,
     pub conversation: Uuid,
     pub text: String,
-    pub crdt: CrdtWritable,
-    pub sequence: CrdtSequence,
+    pub crdt: CrdtWritableSequence,
 }
 impl From<(message::Model, key::Model, conversation::Model)> for NewMessage {
     fn from(
@@ -31,11 +30,13 @@ impl From<(message::Model, key::Model, conversation::Model)> for NewMessage {
             from,
             conversation: conversation.into(),
             text: message.text,
-            crdt: CrdtWritable {
-                author: Author(message.crdt_author),
-                generation: message.crdt_generation,
+            crdt: CrdtWritableSequence {
+                writable: CrdtWritable {
+                    author: Author(message.crdt_author),
+                    generation: message.crdt_generation,
+                },
+                sequence: message.crdt_sequence,
             },
-            sequence: CrdtSequence(message.crdt_sequence),
         }
     }
 }

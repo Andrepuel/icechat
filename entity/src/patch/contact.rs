@@ -1,6 +1,6 @@
-use super::{CrdtWritable, Key};
+use super::Key;
 use crate::{
-    crdt::Author,
+    crdt::{Author, CrdtWritable},
     entity::{contact, key},
 };
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait};
