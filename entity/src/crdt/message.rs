@@ -1,7 +1,7 @@
 use super::{Author, CrdtValue, CrdtValueTransaction};
 use crate::{
     entity::{conversation, key, message},
-    patch::{Contact, Conversation, MessageStatus, NewMessage, Key},
+    patch::{Contact, Conversation, Key, MessageStatus, NewMessage},
     uuid::SplitUuid,
 };
 use futures::{future::LocalBoxFuture, FutureExt};
@@ -150,14 +150,12 @@ impl CrdtValueTransaction<MessageStatus> for DatabaseTransaction {
     ) -> LocalBoxFuture<'_, MessageStatus> {
         async move {
             let active = match existent {
-                Some((id, _)) => {
-                    message::ActiveModel {
-                        id: ActiveValue::Unchanged(id),
-                        status: ActiveValue::Set(status.status),
-                        crdt_generation: ActiveValue::Set(status.crdt.generation),
-                        crdt_author: ActiveValue::Set(status.crdt.author.0),
-                        ..Default::default()
-                    }
+                Some((id, _)) => message::ActiveModel {
+                    id: ActiveValue::Unchanged(id),
+                    status: ActiveValue::Set(status.status),
+                    crdt_generation: ActiveValue::Set(status.crdt.generation),
+                    crdt_author: ActiveValue::Set(status.crdt.author.0),
+                    ..Default::default()
                 },
                 None => {
                     let (from, _) = Contact::get_or_create(Key::default(), self).await;
@@ -184,7 +182,8 @@ impl CrdtValueTransaction<MessageStatus> for DatabaseTransaction {
             active.save(self).await.unwrap();
 
             status
-        }.boxed_local()
+        }
+        .boxed_local()
     }
 
     fn existent(
@@ -203,9 +202,10 @@ impl CrdtValueTransaction<MessageStatus> for DatabaseTransaction {
                 .await
                 .unwrap()?;
 
-            let id  = message.id;
+            let id = message.id;
 
             Some((id, message.into()))
-        }.boxed_local()
+        }
+        .boxed_local()
     }
 }

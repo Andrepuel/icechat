@@ -89,12 +89,7 @@ impl UuidColumn for conversation::Column {
 }
 impl UuidValue for conversation::Model {
     fn get_uuid(&self) -> SplitUuid {
-        SplitUuid(
-            self.uuid0,
-            self.uuid1,
-            self.uuid2,
-            self.uuid3,
-        )
+        SplitUuid(self.uuid0, self.uuid1, self.uuid2, self.uuid3)
     }
 }
 
@@ -110,11 +105,6 @@ impl UuidColumn for message::Column {
 }
 impl UuidValue for message::Model {
     fn get_uuid(&self) -> SplitUuid {
-        SplitUuid(
-            self.uuid0,
-            self.uuid1,
-            self.uuid2,
-            self.uuid3,
-        )
+        SplitUuid(self.uuid0, self.uuid1, self.uuid2, self.uuid3)
     }
 }

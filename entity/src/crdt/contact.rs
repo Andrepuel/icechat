@@ -1,8 +1,8 @@
+use super::{Author, CrdtValue, CrdtValueTransaction};
 use crate::{
     entity::contact,
     patch::{Contact, Key},
 };
-use super::{Author, CrdtValue, CrdtValueTransaction};
 use futures::{future::LocalBoxFuture, FutureExt};
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait};
 
