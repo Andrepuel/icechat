@@ -1,4 +1,4 @@
-use super::{CrdtValue, CrdtValueTransaction, CrdtWritable};
+use super::{writable::CrdtWritable, CrdtInstance, CrdtTransaction};
 use crate::{
     entity::contact,
     patch::{Contact, Key},
@@ -6,7 +6,7 @@ use crate::{
 use futures::{future::LocalBoxFuture, FutureExt};
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait};
 
-impl CrdtValue for Contact {
+impl CrdtInstance for Contact {
     type Id = Key;
     type Crdt = CrdtWritable;
 
@@ -23,7 +23,7 @@ impl CrdtValue for Contact {
     }
 }
 
-impl CrdtValueTransaction<Contact> for DatabaseTransaction {
+impl CrdtTransaction<Contact> for DatabaseTransaction {
     type RowId = i32;
 
     fn save(

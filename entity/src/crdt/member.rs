@@ -1,4 +1,4 @@
-use super::{CrdtAddOnly, CrdtValue, CrdtValueTransaction};
+use super::{CrdtAddOnly, CrdtInstance, CrdtTransaction};
 use crate::{
     entity::member,
     patch::{Contact, Conversation, Key, Member},
@@ -9,7 +9,7 @@ use sea_orm::{
 };
 use uuid::Uuid;
 
-impl CrdtValue for Member {
+impl CrdtInstance for Member {
     type Id = (Key, Uuid);
     type Crdt = CrdtAddOnly;
 
@@ -24,7 +24,7 @@ impl CrdtValue for Member {
     fn set_crdt(&mut self, _crdt: Self::Crdt) {}
 }
 
-impl CrdtValueTransaction<Member> for DatabaseTransaction {
+impl CrdtTransaction<Member> for DatabaseTransaction {
     type RowId = (i32, i32);
 
     fn save(
@@ -53,7 +53,7 @@ impl CrdtValueTransaction<Member> for DatabaseTransaction {
 
     fn existent(
         &mut self,
-        id: <Member as CrdtValue>::Id,
+        id: <Member as CrdtInstance>::Id,
     ) -> LocalBoxFuture<'_, Option<(Self::RowId, Member)>> {
         async move {
             let (key, contact) = Contact::get_or_create(id.0, self).await;

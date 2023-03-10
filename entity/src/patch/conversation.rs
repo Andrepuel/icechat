@@ -1,5 +1,5 @@
 use crate::{
-    crdt::{Author, CrdtWritable},
+    crdt::{writable::CrdtWritable, Author},
     entity::conversation,
     uuid::{SplitUuid, UuidValue},
 };

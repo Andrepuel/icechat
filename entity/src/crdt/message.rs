@@ -1,4 +1,6 @@
-use super::{CrdtValue, CrdtValueTransaction, CrdtWritable, CrdtWritableSequence};
+use super::{
+    sequence::CrdtWritableSequence, writable::CrdtWritable, CrdtInstance, CrdtTransaction,
+};
 use crate::{
     entity::{conversation, key, message},
     patch::{Contact, Conversation, Key, MessageStatus, NewMessage},
@@ -8,7 +10,7 @@ use futures::{future::LocalBoxFuture, FutureExt};
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, QueryFilter};
 use uuid::Uuid;
 
-impl CrdtValue for NewMessage {
+impl CrdtInstance for NewMessage {
     type Id = Uuid;
     type Crdt = CrdtWritableSequence;
 
@@ -25,7 +27,7 @@ impl CrdtValue for NewMessage {
     }
 }
 
-impl CrdtValueTransaction<NewMessage> for DatabaseTransaction {
+impl CrdtTransaction<NewMessage> for DatabaseTransaction {
     type RowId = i32;
 
     fn save(
@@ -75,7 +77,7 @@ impl CrdtValueTransaction<NewMessage> for DatabaseTransaction {
 
     fn existent(
         &mut self,
-        id: <NewMessage as CrdtValue>::Id,
+        id: <NewMessage as CrdtInstance>::Id,
     ) -> LocalBoxFuture<'_, Option<(i32, NewMessage)>> {
         async move {
             let uuid_filter = SplitUuid::from(id).to_filter::<message::Column>();
@@ -109,7 +111,7 @@ impl CrdtValueTransaction<NewMessage> for DatabaseTransaction {
     }
 }
 
-impl CrdtValue for MessageStatus {
+impl CrdtInstance for MessageStatus {
     type Id = Uuid;
     type Crdt = CrdtWritable;
 
@@ -126,7 +128,7 @@ impl CrdtValue for MessageStatus {
     }
 }
 
-impl CrdtValueTransaction<MessageStatus> for DatabaseTransaction {
+impl CrdtTransaction<MessageStatus> for DatabaseTransaction {
     type RowId = i32;
 
     fn save(
@@ -174,7 +176,7 @@ impl CrdtValueTransaction<MessageStatus> for DatabaseTransaction {
 
     fn existent(
         &mut self,
-        id: <MessageStatus as CrdtValue>::Id,
+        id: <MessageStatus as CrdtInstance>::Id,
     ) -> LocalBoxFuture<'_, Option<(Self::RowId, MessageStatus)>> {
         async move {
             let uuid_filter = SplitUuid::from(id).to_filter::<message::Column>();

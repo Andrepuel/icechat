@@ -9,7 +9,7 @@ pub use self::{
     member::Member,
     message::{MessageStatus, NewMessage},
 };
-use crate::{crdt::CrdtValueTransaction, entity::key};
+use crate::{crdt::CrdtTransaction, entity::key};
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter,
 };

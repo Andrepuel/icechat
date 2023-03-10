@@ -1,6 +1,6 @@
 use super::Key;
 use crate::{
-    crdt::{Author, CrdtWritable, CrdtWritableSequence},
+    crdt::{sequence::CrdtWritableSequence, writable::CrdtWritable, Author},
     entity::{conversation, key, message},
     uuid::UuidValue,
 };

@@ -1,10 +1,10 @@
-use super::{CrdtValue, CrdtValueTransaction, CrdtWritable};
+use super::{writable::CrdtWritable, CrdtInstance, CrdtTransaction};
 use crate::{entity::conversation, patch::Conversation, uuid::SplitUuid};
 use futures::{future::LocalBoxFuture, FutureExt};
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, QueryFilter};
 use uuid::Uuid;
 
-impl CrdtValue for Conversation {
+impl CrdtInstance for Conversation {
     type Id = Uuid;
     type Crdt = CrdtWritable;
 
@@ -21,7 +21,7 @@ impl CrdtValue for Conversation {
     }
 }
 
-impl CrdtValueTransaction<Conversation> for DatabaseTransaction {
+impl CrdtTransaction<Conversation> for DatabaseTransaction {
     type RowId = i32;
 
     fn save(
@@ -64,7 +64,7 @@ impl CrdtValueTransaction<Conversation> for DatabaseTransaction {
 
     fn existent(
         &mut self,
-        id: <Conversation as CrdtValue>::Id,
+        id: <Conversation as CrdtInstance>::Id,
     ) -> LocalBoxFuture<'_, Option<(i32, Conversation)>> {
         async move {
             let uuid_filter = SplitUuid::from(id).to_filter::<conversation::Column>();
