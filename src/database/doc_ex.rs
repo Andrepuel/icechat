@@ -90,6 +90,21 @@ pub trait ReadDocEx: ReadDoc {
             .map_err(|actual| UnexpectedType::from_actual_scalar(&actual, expected).into())
     }
 
+    fn get_opt_bytes<O: AsRef<ObjId>, P: Into<Prop>>(
+        &self,
+        obj: O,
+        prop: P,
+    ) -> DatabaseResult<Option<Vec<u8>>> {
+        let expected = DataType::Bytes;
+        let Some(scalar) = self.get_opt_scalar(obj, prop, expected)? else { return Ok(None); };
+
+        scalar
+            .into_owned()
+            .into_bytes()
+            .map(Some)
+            .map_err(|actual| UnexpectedType::from_actual_scalar(&actual, expected).into())
+    }
+
     fn get_u64<O: AsRef<ObjId>, P: Into<Prop>>(&self, obj: O, prop: P) -> DatabaseResult<u64> {
         let expected = DataType::Uint;
         match self.get_scalar(obj, prop.into(), expected)?.as_ref() {

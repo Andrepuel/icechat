@@ -122,7 +122,7 @@ impl Contact {
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub from: Uuid,
-    pub content: String,
+    pub content: Content,
     pub status: MessageStatus,
 }
 impl Message {
@@ -132,6 +132,11 @@ impl Message {
             .try_into()
             .map_err(|_| DatabaseError::BadUuid)?;
         let content = doc.get_string(&obj, "content")?;
+        let blob = doc.get_opt_bytes(&obj, "blob")?;
+        let content = match blob {
+            Some(blob) => Content::Attachment(content, blob),
+            None => Content::Text(content),
+        };
         let status = doc.get_u64(&obj, "status")?;
 
         Ok(Self {
@@ -143,10 +148,36 @@ impl Message {
 
     pub fn reconcile<T: Transactable>(&self, trans: &mut T, obj: ObjId) -> DatabaseResult<()> {
         trans.put(&obj, "from", self.from.as_bytes().to_vec())?;
-        trans.put(&obj, "content", self.content.to_string())?;
+        match &self.content {
+            Content::Text(content) => {
+                trans.put(&obj, "content", content.to_string())?;
+            }
+            Content::Attachment(content, blob) => {
+                trans.put(&obj, "content", content.to_string())?;
+                trans.put(&obj, "blob", blob.clone())?;
+            }
+        }
         trans.put(&obj, "status", Into::<u64>::into(self.status))?;
 
         Ok(())
+    }
+
+    pub fn text(&self) -> &str {
+        match &self.content {
+            Content::Text(text) => text,
+            Content::Attachment(text, _) => text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Content {
+    Text(String),
+    Attachment(String, Vec<u8>),
+}
+impl Default for Content {
+    fn default() -> Self {
+        Content::Text(Default::default())
     }
 }
 
@@ -531,7 +562,27 @@ pub mod tests {
 
             let message = Message {
                 from: Uuid::new_v4(),
-                content: "Hello".to_string(),
+                content: Content::Text("Hello".to_string()),
+                status: MessageStatus::Sent,
+            };
+
+            assert_eq!(database.list_messages().count(), 0);
+            database.add_message(message.clone())?;
+            assert_eq!(
+                database.list_messages().collect::<Result<Vec<_>, _>>()?,
+                vec![message]
+            );
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn it_gets_and_sets_attachments(given: Given) -> DatabaseResult<()> {
+            let (mut database, ..) = given;
+
+            let message = Message {
+                from: Uuid::new_v4(),
+                content: Content::Attachment("main.rs".to_string(), b"fn main() {}".to_vec()),
                 status: MessageStatus::Sent,
             };
 
@@ -562,7 +613,7 @@ pub mod tests {
                 database
                     .add_message(Message {
                         from: Uuid::new_v4(),
-                        content: "Hello".to_string(),
+                        content: Content::Text("Hello".to_string()),
                         ..Default::default()
                     })
                     .unwrap();

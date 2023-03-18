@@ -196,7 +196,7 @@ pub mod tests {
             let mut buffer = stream.0.lock().unwrap();
             assert_eq!(buffer.len(), 2);
             assert_eq!(buffer[0].len(), 4096);
-            assert_eq!(buffer[1].len(), 6000 - 4096 + 2);
+            assert_eq!(buffer[1].len(), 6000 - 4096 + 4);
             total.extend(buffer[0].iter().copied());
             total.extend(buffer[1].iter().copied());
             buffer.clear();
@@ -219,7 +219,7 @@ pub mod tests {
     #[tokio::test]
     async fn receiving_two_packets_in_one_recv() {
         let stream = ArcStream(Arc::new(Mutex::new(
-            [vec![0, 1, 10, 0, 1, 11]].into_iter().collect(),
+            [vec![0, 0, 0, 1, 10, 0, 0, 0, 1, 11]].into_iter().collect(),
         )));
         let mut fragmentable = Fragmentable::new(stream.clone());
 

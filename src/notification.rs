@@ -4,12 +4,10 @@ use notify_rust::Notification;
 pub struct NotificationManager;
 impl NotificationManager {
     pub fn show(from: Contact, message: Message) {
-        let message = match message.content.len() {
-            0..=128 => message.content,
-            _ => format!(
-                "{}...",
-                message.content.chars().take(128).collect::<String>()
-            ),
+        let text = message.text();
+        let message = match text.len() {
+            0..=128 => text.to_string(),
+            _ => format!("{}...", text.chars().take(128).collect::<String>()),
         };
 
         let r = Notification::new()

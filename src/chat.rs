@@ -1,8 +1,8 @@
 use crate::{
     channel::{Channel, ChannelStateLabel, ChannelValue, Ed25519Cert, Ed25519Seed},
     database::{
-        error::DatabaseResult, AutomergeDbSync, ChannelData, Contact, LocalDatabase, Message,
-        MessageStatus, SharedDatabase,
+        error::DatabaseResult, AutomergeDbSync, ChannelData, Contact, Content, LocalDatabase,
+        Message, MessageStatus, SharedDatabase,
     },
 };
 use futures_util::{future::select_all, FutureExt};
@@ -116,7 +116,19 @@ impl Chat {
     pub fn send_message(&mut self, content: String) -> Message {
         let message = Message {
             from: self.user(),
-            content,
+            content: Content::Text(content),
+            ..Default::default()
+        };
+
+        self.database.add_message(message.clone()).unwrap();
+
+        message
+    }
+
+    pub fn send_file(&mut self, name: String, blob: Vec<u8>) -> Message {
+        let message = Message {
+            from: self.user(),
+            content: Content::Attachment(name, blob),
             ..Default::default()
         };
 

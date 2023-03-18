@@ -4,7 +4,7 @@ use futures_util::{future::select_all, FutureExt};
 use icechat::{
     channel::{Ed25519Cert, Ed25519Seed},
     chat::{Chat, ChatValue},
-    database::Contact,
+    database::{Contact, Content},
     notification::NotificationManager,
     poll_runtime::PollRuntime,
 };
@@ -150,20 +150,19 @@ impl ConversationTab {
             ui.horizontal(|ui| {
                 let text_edit = ui.text_edit_multiline(&mut self.message);
 
-                let mut send_message = |msg: &mut String| {
-                    let content = std::mem::take(msg);
-                    self.chat.send_message(content);
-                    self.chat.save();
-                };
-
                 if ui.button("Send").clicked() && !self.message.is_empty() {
-                    send_message(&mut self.message);
+                    self.send_message();
                 }
+
+                if ui.button("Send file").clicked() {
+                    self.send_file();
+                }
+
                 if ui
                     .input_mut()
                     .consume_key(egui::Modifiers::default(), egui::Key::Enter)
                 {
-                    send_message(&mut self.message);
+                    self.send_message();
                     text_edit.request_focus();
                 }
             });
@@ -176,18 +175,28 @@ impl ConversationTab {
                             state = message.status,
                             name = from.name
                         ));
-                        ui.horizontal(|ui| {
-                            if ui.button("⬅").clicked() {
-                                self.message = format!(
-                                    "{sender} said:\n{message}\n\n",
-                                    sender = from.name,
-                                    message = message.content
-                                );
+                        ui.horizontal(|ui| match message.content {
+                            Content::Text(text) => {
+                                if ui.button("⬅").clicked() {
+                                    self.message = format!(
+                                        "{sender} said:\n{message}\n\n",
+                                        sender = from.name,
+                                        message = text,
+                                    );
+                                }
+                                if ui.button("📋").clicked() {
+                                    ui.output().copied_text = text.to_string();
+                                }
+
+                                ui.label(text);
                             }
-                            if ui.button("📋").clicked() {
-                                ui.output().copied_text = message.content.clone();
+                            Content::Attachment(name, blob) => {
+                                if ui.button("💾").clicked() {
+                                    Self::save_file(&name, &blob);
+                                }
+
+                                ui.label(name);
                             }
-                            ui.label(message.content);
                         });
                         ui.separator();
                     }
@@ -267,6 +276,35 @@ impl ConversationTab {
                     });
                 });
             });
+    }
+
+    fn send_message(&mut self) {
+        let content = std::mem::take(&mut self.message);
+        self.chat.send_message(content);
+        self.chat.save();
+    }
+
+    fn send_file(&mut self) {
+        let path = FileDialog::new().set_title("Send file").pick_file();
+
+        let Some(path) = path else { return; };
+
+        let name = path
+            .file_name()
+            .map(|x| x.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "unnamed file".to_string());
+        let blob = std::fs::read(path).unwrap();
+
+        self.chat.send_file(name, blob);
+        self.chat.save();
+    }
+
+    fn save_file(name: &str, blob: &[u8]) {
+        let path = FileDialog::new().set_file_name(name).save_file();
+
+        let Some(path) = path else { return; };
+
+        std::fs::write(path, blob).unwrap();
     }
 
     async fn wait(&mut self) -> ChatValue {
