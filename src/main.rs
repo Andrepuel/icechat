@@ -115,6 +115,7 @@ struct ConversationTab {
     new_channel_seed: Ed25519Seed,
     new_channel_pub: Ed25519Cert,
     message: String,
+    max: usize,
 }
 impl ConversationTab {
     fn load<P: AsRef<Path>>(path: P) -> ConversationTab {
@@ -138,6 +139,7 @@ impl ConversationTab {
             new_channel_seed,
             new_channel_pub,
             message: Default::default(),
+            max: 10,
         }
     }
 
@@ -168,7 +170,9 @@ impl ConversationTab {
             });
             egui::containers::ScrollArea::vertical().show(ui, |ui| {
                 ui.vertical(|ui| {
-                    for message in self.chat.list_messages().rev() {
+                    let mut n = 0;
+                    for message in self.chat.list_messages().rev().take(self.max) {
+                        n += 1;
                         let from = self.chat.get_peer(message.from).unwrap_or_default();
                         ui.label(format!(
                             "({state:?}) {name}",
@@ -199,6 +203,10 @@ impl ConversationTab {
                             }
                         });
                         ui.separator();
+                    }
+
+                    if n == self.max && ui.button("Load more").clicked() {
+                        self.max += 10;
                     }
                 });
             });
