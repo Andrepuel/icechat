@@ -7,7 +7,7 @@ use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, Q
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Conversation {
     pub id: Uuid,
     pub title: Option<String>,

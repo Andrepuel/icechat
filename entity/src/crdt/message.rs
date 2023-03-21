@@ -137,17 +137,19 @@ impl CrdtTransaction<MessageStatus> for DatabaseTransaction {
         existent: Option<(Self::RowId, MessageStatus)>,
     ) -> LocalBoxFuture<'_, MessageStatus> {
         async move {
+            let conversation = Conversation::get_or_create(status.conversation, self).await;
+
             let active = match existent {
                 Some((id, _)) => message::ActiveModel {
                     id: ActiveValue::Unchanged(id),
                     status: ActiveValue::Set(status.status),
+                    conversation: ActiveValue::Set(conversation.id),
                     crdt_generation: ActiveValue::Set(status.crdt.generation),
                     crdt_author: ActiveValue::Set(status.crdt.author.0),
                     ..Default::default()
                 },
                 None => {
                     let (from, _) = Contact::get_or_create(Key::default(), self).await;
-                    let conversation = Conversation::get_or_create(Default::default(), self).await;
                     let uuid = SplitUuid::from(status.id);
 
                     message::ActiveModel {
@@ -181,7 +183,8 @@ impl CrdtTransaction<MessageStatus> for DatabaseTransaction {
         async move {
             let uuid_filter = SplitUuid::from(id).to_filter::<message::Column>();
 
-            let message = message::Entity::find()
+            let (message, conversation) = message::Entity::find()
+                .find_also_related(conversation::Entity)
                 .filter(uuid_filter.0)
                 .filter(uuid_filter.1)
                 .filter(uuid_filter.2)
@@ -190,9 +193,10 @@ impl CrdtTransaction<MessageStatus> for DatabaseTransaction {
                 .await
                 .unwrap()?;
 
+            let conversation = conversation.unwrap();
             let id = message.id;
 
-            Some((id, message.into()))
+            Some((id, (message, conversation).into()))
         }
         .boxed_local()
     }

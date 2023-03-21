@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NewMessage {
     pub id: Uuid,
     pub from: Key,
@@ -41,22 +41,25 @@ impl From<(message::Model, key::Model, conversation::Model)> for NewMessage {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MessageStatus {
     pub id: Uuid,
+    pub conversation: Uuid,
     pub status: i32,
     pub crdt: CrdtWritable,
 }
-impl From<message::Model> for MessageStatus {
-    fn from(value: message::Model) -> Self {
-        let id = value.get_uuid();
+impl From<(message::Model, conversation::Model)> for MessageStatus {
+    fn from((message, conversation): (message::Model, conversation::Model)) -> Self {
+        let id = message.get_uuid();
+        let conversation = conversation.get_uuid();
 
         MessageStatus {
             id: id.into(),
-            status: value.status,
+            conversation: conversation.into(),
+            status: message.status,
             crdt: CrdtWritable {
-                author: Author(value.crdt_author),
-                generation: value.crdt_generation,
+                author: Author(message.crdt_author),
+                generation: message.crdt_generation,
             },
         }
     }

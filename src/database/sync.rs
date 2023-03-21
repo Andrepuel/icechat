@@ -1,25 +1,67 @@
 use super::{error::DatabaseResult, DbSync};
-use entity::crdt::Author;
+use entity::{crdt::Author, patch::Patch};
 use futures_util::{future::LocalBoxFuture, FutureExt};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use uuid::Uuid;
 
 pub trait PatchDataSource {
-    fn next(&mut self) -> LocalBoxFuture<DatabaseResult<Option<PatchData>>>;
+    fn next(&mut self) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>>;
     fn ack(&mut self, id: PatchDataId) -> LocalBoxFuture<DatabaseResult<()>>;
-    fn merge(&mut self, data: PatchData) -> LocalBoxFuture<DatabaseResult<Option<PatchData>>>;
-    fn save(&mut self, data: PatchData) -> LocalBoxFuture<DatabaseResult<()>>;
+    fn merge(&mut self, data: SyncData) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>>;
+    fn save(&mut self, data: SyncData) -> LocalBoxFuture<DatabaseResult<()>>;
 }
 
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PatchData {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SyncData {
     id: PatchDataId,
     author: Author,
-    conversation: Option<Uuid>,
+    payload: Patch,
+}
+impl Default for SyncData {
+    fn default() -> Self {
+        SyncData {
+            id: Default::default(),
+            author: Default::default(),
+            payload: Patch::Contact(Default::default()),
+        }
+    }
+}
+impl SyncData {
+    pub fn conversation(&self) -> Option<Uuid> {
+        match &self.payload {
+            Patch::Contact(_) => None,
+            Patch::Conversation(conversation) => Some(conversation.id),
+            Patch::Member(member) => Some(member.conversation),
+            Patch::NewMessage(message) => Some(message.conversation),
+            Patch::MessageStatus(status) => Some(status.conversation),
+        }
+    }
 }
 
-pub type PatchDataId = i32;
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PatchDataId {
+    Global(i32),
+    InitialSync(i32),
+}
+impl From<i32> for PatchDataId {
+    fn from(value: i32) -> Self {
+        PatchDataId::Global(value)
+    }
+}
+impl PatchDataId {
+    pub fn global(self) -> i32 {
+        match self {
+            PatchDataId::Global(global) => global,
+            PatchDataId::InitialSync(_) => panic!("Id is not global"),
+        }
+    }
+}
+impl Default for PatchDataId {
+    fn default() -> Self {
+        PatchDataId::Global(Default::default())
+    }
+}
 
 pub struct PatchSync<S: PatchDataSource> {
     author: Author,
@@ -28,8 +70,7 @@ pub struct PatchSync<S: PatchDataSource> {
     _marker: std::marker::PhantomData<S>,
 }
 impl<S: PatchDataSource> PatchSync<S> {
-    pub fn new(source: &mut S, author: Author, conversation: Uuid) -> Self {
-        let _ = source;
+    pub fn new(author: Author, conversation: Uuid) -> Self {
         PatchSync {
             author,
             conversation,
@@ -57,7 +98,7 @@ impl<S: PatchDataSource> DbSync for PatchSync<S> {
                 };
 
                 let skip_by_conversation = next
-                    .conversation
+                    .conversation()
                     .map(|conversation| conversation != self.conversation)
                     .unwrap_or(false);
 
@@ -80,9 +121,17 @@ impl<S: PatchDataSource> DbSync for PatchSync<S> {
             match message {
                 PatchSyncMessage::Data(data) => {
                     let id = data.id;
-                    if let Some(data) = database.merge(data).await? {
-                        database.save(data).await?;
+                    let valid_conversation = data
+                        .conversation()
+                        .map(|conversation| conversation == self.conversation)
+                        .unwrap_or(true);
+
+                    if valid_conversation {
+                        if let Some(data) = database.merge(data).await? {
+                            database.save(data).await?;
+                        }
                     }
+
                     self.tx.push_back(PatchSyncMessage::Ack(id));
                 }
                 PatchSyncMessage::Ack(id) => database.ack(id).await?,
@@ -96,31 +145,41 @@ impl<S: PatchDataSource> DbSync for PatchSync<S> {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PatchSyncMessage {
-    Data(PatchData),
+    Data(SyncData),
     Ack(PatchDataId),
+}
+impl From<SyncData> for PatchSyncMessage {
+    fn from(value: SyncData) -> Self {
+        PatchSyncMessage::Data(value)
+    }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use super::*;
+    use entity::patch::{Conversation, Member, MessageStatus, NewMessage};
+    use rstest::*;
     use std::collections::HashSet;
 
-    use super::*;
-    use rstest::*;
+    const PEER: Author = Author(3);
+    const USER: Author = Author(5);
+    const SAME_CONVERSATION: Uuid = Uuid::from_u128(3);
+    const OTHER_CONVERSATION: Uuid = Uuid::from_u128(5);
 
     #[derive(Clone, Default)]
     struct SourceMock {
-        patches: Vec<PatchData>,
+        patches: Vec<SyncData>,
         minimum_ack: i32,
         merged: HashSet<PatchDataId>,
     }
     impl PatchDataSource for SourceMock {
-        fn next(&mut self) -> LocalBoxFuture<DatabaseResult<Option<PatchData>>> {
+        fn next(&mut self) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
             async move {
                 let minimum = self.minimum_ack;
                 Ok(self
                     .patches
                     .iter()
-                    .find(|patch| patch.id > minimum)
+                    .find(|patch| patch.id.global() > minimum)
                     .cloned())
             }
             .boxed_local()
@@ -128,14 +187,14 @@ pub mod tests {
 
         fn ack(&mut self, id: PatchDataId) -> LocalBoxFuture<DatabaseResult<()>> {
             async move {
-                self.minimum_ack = self.minimum_ack.max(id);
+                self.minimum_ack = self.minimum_ack.max(id.global());
 
                 Ok(())
             }
             .boxed_local()
         }
 
-        fn merge(&mut self, data: PatchData) -> LocalBoxFuture<DatabaseResult<Option<PatchData>>> {
+        fn merge(&mut self, data: SyncData) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
             async move {
                 Ok(match self.merged.insert(data.id) {
                     true => Some(data),
@@ -145,7 +204,7 @@ pub mod tests {
             .boxed_local()
         }
 
-        fn save(&mut self, data: PatchData) -> LocalBoxFuture<DatabaseResult<()>> {
+        fn save(&mut self, data: SyncData) -> LocalBoxFuture<DatabaseResult<()>> {
             async move {
                 self.patches.push(data);
                 Ok(())
@@ -154,14 +213,66 @@ pub mod tests {
         }
     }
 
+    #[rstest]
+    #[case(a_contact_patch(), None)]
+    #[case(a_conversation_patch(), Some(SAME_CONVERSATION))]
+    #[case(a_member_patch(), Some(SAME_CONVERSATION))]
+    #[case(a_message_patch(), Some(SAME_CONVERSATION))]
+    #[case(a_message_status_patch(), Some(SAME_CONVERSATION))]
+    fn given_a_sync_data_the_conversation_is_inferred_from_the_patch(
+        #[case] patch: Patch,
+        #[case] conversation: Option<Uuid>,
+    ) {
+        let sync_data = SyncData {
+            payload: patch,
+            ..Default::default()
+        };
+
+        assert_eq!(sync_data.conversation(), conversation)
+    }
+    fn a_contact_patch() -> Patch {
+        Patch::Contact(Default::default())
+    }
+    fn a_conversation_patch() -> Patch {
+        Patch::Conversation(Conversation {
+            id: SAME_CONVERSATION,
+            title: Default::default(),
+            crdt: Default::default(),
+        })
+    }
+    fn a_member_patch() -> Patch {
+        Patch::Member(Member {
+            key: Default::default(),
+            conversation: SAME_CONVERSATION,
+            crdt: entity::crdt::CrdtAddOnly,
+        })
+    }
+    fn a_message_patch() -> Patch {
+        Patch::NewMessage(NewMessage {
+            id: Default::default(),
+            from: Default::default(),
+            conversation: SAME_CONVERSATION,
+            text: Default::default(),
+            crdt: Default::default(),
+        })
+    }
+    fn a_message_status_patch() -> Patch {
+        Patch::MessageStatus(MessageStatus {
+            id: Default::default(),
+            conversation: SAME_CONVERSATION,
+            status: Default::default(),
+            crdt: Default::default(),
+        })
+    }
+
     mod given_a_patch_sync {
         use super::*;
 
         type Given = (SourceMock, PatchSync<SourceMock>);
         #[fixture]
         fn given() -> Given {
-            let mut source = Default::default();
-            let sync = PatchSync::new(&mut source, Author(3), Uuid::from_u128(3));
+            let source = Default::default();
+            let sync = PatchSync::new(PEER, SAME_CONVERSATION);
 
             (source, sync)
         }
@@ -172,9 +283,9 @@ pub mod tests {
             given: Given,
         ) {
             let (mut source, mut sync, ..) = given;
-            let data = PatchData {
-                id: 37,
-                author: Author(5),
+            let data = SyncData {
+                id: 37.into(),
+                author: USER,
                 ..Default::default()
             };
             source.patches = vec![data];
@@ -186,12 +297,12 @@ pub mod tests {
         mod when_it_receives_a_patch {
             use super::*;
 
-            type Given = (SourceMock, PatchSync<SourceMock>, PatchData);
+            type Given = (SourceMock, PatchSync<SourceMock>, SyncData);
             async fn given() -> Given {
                 let (mut source, mut sync) = super::given();
-                let data = PatchData {
-                    id: 37,
-                    author: Author(5),
+                let data = SyncData {
+                    id: 37.into(),
+                    author: PEER,
                     ..Default::default()
                 };
 
@@ -229,12 +340,12 @@ pub mod tests {
         mod when_it_receives_a_repeated_patch {
             use super::*;
 
-            type Given = (SourceMock, PatchSync<SourceMock>, PatchData);
+            type Given = (SourceMock, PatchSync<SourceMock>, SyncData);
             async fn given() -> Given {
                 let (mut source, mut sync) = super::given();
-                let data = PatchData {
-                    id: 37,
-                    author: Author(5),
+                let data = SyncData {
+                    id: 37.into(),
+                    author: PEER,
                     ..Default::default()
                 };
 
@@ -267,22 +378,88 @@ pub mod tests {
         async fn when_it_receives_an_ack_message_it_sets_it_on_database(given: Given) {
             let (mut source, mut sync, ..) = given;
 
-            let ack = PatchSyncMessage::Ack(3);
+            let ack = PatchSyncMessage::Ack(3.into());
             sync.rx(&mut source, ack).await.unwrap();
 
             assert_eq!(source.minimum_ack, 3);
         }
 
+        mod when_it_receives_a_message_with_a_different_conversation {
+            use super::*;
+
+            type Given = (SourceMock, PatchSync<SourceMock>, SyncData);
+            async fn given() -> Given {
+                let (mut source, mut sync, ..) = super::given();
+
+                let diff_conv = SyncData {
+                    id: 37.into(),
+                    author: PEER,
+                    payload: Patch::Conversation(Conversation {
+                        id: OTHER_CONVERSATION,
+                        title: Default::default(),
+                        crdt: Default::default(),
+                    }),
+                };
+
+                sync.rx(&mut source, diff_conv.clone().into())
+                    .await
+                    .unwrap();
+
+                (source, sync, diff_conv)
+            }
+
+            #[rstest]
+            #[tokio::test]
+            async fn it_does_not_merge_the_patch() {
+                let (source, ..) = given().await;
+
+                assert_eq!(source.merged.into_iter().collect::<Vec<_>>(), vec![]);
+            }
+
+            #[rstest]
+            #[tokio::test]
+            async fn then_it_acknowledges_the_message() {
+                let (mut source, mut sync, data, ..) = given().await;
+
+                let tx = sync.tx(&mut source).await.unwrap();
+
+                assert_eq!(tx, Some(PatchSyncMessage::Ack(data.id)))
+            }
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn when_it_receives_a_message_with_correct_conversation_it_is_merged(given: Given) {
+            let (mut source, mut sync, ..) = given;
+
+            let correct_conv = SyncData {
+                id: 37.into(),
+                author: PEER,
+                payload: Patch::Conversation(Conversation {
+                    id: SAME_CONVERSATION,
+                    title: Default::default(),
+                    crdt: Default::default(),
+                }),
+            };
+
+            sync.rx(&mut source, correct_conv.into()).await.unwrap();
+
+            assert_eq!(
+                source.merged.into_iter().collect::<Vec<_>>(),
+                vec![PatchDataId::Global(37)]
+            );
+        }
+
         mod when_next_patch_is_from_the_peer_itself {
             use super::*;
 
-            type Given = (SourceMock, PatchSync<SourceMock>, PatchData);
+            type Given = (SourceMock, PatchSync<SourceMock>, SyncData);
             #[fixture]
             fn given() -> Given {
                 let (mut source, sync) = super::given();
-                let data = PatchData {
-                    id: 37,
-                    author: Author(3),
+                let data = SyncData {
+                    id: 37.into(),
+                    author: PEER,
                     ..Default::default()
                 };
                 source.patches.push(data.clone());
@@ -307,7 +484,7 @@ pub mod tests {
 
                 sync.tx(&mut source).await.unwrap();
 
-                assert_eq!(source.minimum_ack, data.id);
+                assert_eq!(source.minimum_ack, data.id.global());
             }
 
             #[rstest]
@@ -317,9 +494,9 @@ pub mod tests {
             ) {
                 let (mut source, mut sync, data, ..) = given;
 
-                let another = PatchData {
-                    id: data.id + 1,
-                    author: Author(5),
+                let another = SyncData {
+                    id: (data.id.global() + 1).into(),
+                    author: USER,
                     ..data.clone()
                 };
                 source.patches.push(another.clone());
@@ -333,15 +510,19 @@ pub mod tests {
         mod when_next_patch_specifies_a_different_conversation_than_the_channels_conversation {
             use super::*;
 
-            type Given = (SourceMock, PatchSync<SourceMock>, PatchData);
+            type Given = (SourceMock, PatchSync<SourceMock>, SyncData);
             #[fixture]
             fn given() -> Given {
                 let (mut source, sync) = super::given();
 
-                let data = PatchData {
-                    id: 37,
-                    author: Author(5),
-                    conversation: Some(Uuid::from_u128(5)),
+                let data = SyncData {
+                    id: 37.into(),
+                    author: USER,
+                    payload: Patch::Conversation(Conversation {
+                        id: OTHER_CONVERSATION,
+                        title: Default::default(),
+                        crdt: Default::default(),
+                    }),
                 };
 
                 source.patches.push(data.clone());
@@ -364,7 +545,7 @@ pub mod tests {
                 let (mut source, mut sync, data, ..) = given;
 
                 sync.tx(&mut source).await.unwrap();
-                assert_eq!(source.minimum_ack, data.id)
+                assert_eq!(source.minimum_ack, data.id.global())
             }
 
             #[rstest]
@@ -374,9 +555,13 @@ pub mod tests {
             ) {
                 let (mut source, mut sync, data, ..) = given;
 
-                let another = PatchData {
-                    id: data.id + 1,
-                    conversation: Some(Uuid::from_u128(3)),
+                let another = SyncData {
+                    id: (data.id.global() + 1).into(),
+                    payload: Patch::Conversation(Conversation {
+                        id: SAME_CONVERSATION,
+                        title: Default::default(),
+                        crdt: Default::default(),
+                    }),
                     ..data.clone()
                 };
                 source.patches.push(another.clone());

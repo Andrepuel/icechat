@@ -6,7 +6,7 @@ use crate::{
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Contact {
     pub key: Key,
     pub name: String,

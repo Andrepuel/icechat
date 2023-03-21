@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Member {
     pub key: Key,
     pub conversation: Uuid,

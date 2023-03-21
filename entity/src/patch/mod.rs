@@ -16,7 +16,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Patch {
     Contact(Contact),
     Conversation(Conversation),
@@ -37,7 +37,7 @@ impl Patch {
 }
 
 pub const KEY_LENGTH: usize = 32;
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Key(Vec<u8>);
 impl Default for Key {
     fn default() -> Self {
