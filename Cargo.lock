@@ -1880,6 +1880,7 @@ dependencies = [
  "clap 4.1.4",
  "eframe",
  "egui_dock",
+ "entity",
  "env_logger",
  "futures-util",
  "icepipe",

@@ -1,13 +1,13 @@
 pub mod doc_ex;
 pub mod error;
+pub mod sync;
 
 use self::error::{DatabaseError, DatabaseResult};
 use automerge::{
-    sync::{self, SyncDoc},
-    transaction::Transactable,
-    Automerge, ObjId, ObjType, ReadDoc, ROOT,
+    sync::SyncDoc, transaction::Transactable, Automerge, ObjId, ObjType, ReadDoc, ROOT,
 };
 use doc_ex::ReadDocEx;
+use futures_util::{future::LocalBoxFuture, FutureExt};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use uuid::Uuid;
 
@@ -179,14 +179,22 @@ impl From<MessageStatus> for u64 {
 
 pub trait DbSync {
     type Database;
+    type Message: serde::Serialize + serde::de::DeserializeOwned;
 
-    fn tx(&mut self, database: &mut Self::Database) -> DatabaseResult<Option<Vec<u8>>>;
-    fn rx(&mut self, database: &mut Self::Database, message: &[u8]) -> DatabaseResult<()>;
+    fn tx<'a>(
+        &'a mut self,
+        database: &'a mut Self::Database,
+    ) -> LocalBoxFuture<'a, DatabaseResult<Option<Self::Message>>>;
+    fn rx<'a>(
+        &'a mut self,
+        database: &'a mut Self::Database,
+        message: Self::Message,
+    ) -> LocalBoxFuture<'a, DatabaseResult<()>>;
 }
 
 #[derive(Default)]
 pub struct AutomergeDbSync {
-    state: sync::State,
+    state: automerge::sync::State,
 }
 impl AutomergeDbSync {
     pub fn new() -> Self {
@@ -195,21 +203,35 @@ impl AutomergeDbSync {
 }
 impl DbSync for AutomergeDbSync {
     type Database = SharedDatabase;
+    type Message = Vec<u8>;
 
-    fn tx(&mut self, database: &mut Self::Database) -> DatabaseResult<Option<Vec<u8>>> {
-        let message = database.doc.generate_sync_message(&mut self.state);
-        let Some(message) = message else { return Ok(None); };
+    fn tx<'a>(
+        &'a mut self,
+        database: &'a mut Self::Database,
+    ) -> LocalBoxFuture<'a, DatabaseResult<Option<Vec<u8>>>> {
+        async move {
+            let message = database.doc.generate_sync_message(&mut self.state);
+            let Some(message) = message else { return Ok(None); };
 
-        Ok(Some(message.encode()))
+            Ok(Some(message.encode()))
+        }
+        .boxed_local()
     }
 
-    fn rx(&mut self, database: &mut Self::Database, message: &[u8]) -> DatabaseResult<()> {
-        let message = sync::Message::decode(message)?;
-        database
-            .doc
-            .receive_sync_message(&mut self.state, message)?;
+    fn rx<'a>(
+        &'a mut self,
+        database: &'a mut Self::Database,
+        message: Vec<u8>,
+    ) -> LocalBoxFuture<'a, DatabaseResult<()>> {
+        async move {
+            let message = automerge::sync::Message::decode(&message)?;
+            database
+                .doc
+                .receive_sync_message(&mut self.state, message)?;
 
-        Ok(())
+            Ok(())
+        }
+        .boxed_local()
     }
 }
 
@@ -583,7 +605,8 @@ pub mod tests {
             }
 
             #[rstest]
-            fn it_syncs_with_another_empty_database(given: Given) -> DatabaseResult<()> {
+            #[tokio::test]
+            async fn it_syncs_with_another_empty_database(given: Given) -> DatabaseResult<()> {
                 let (mut database, ..) = given;
 
                 let mut other = SharedDatabase::with_user(Uuid::new_v4())?;
@@ -596,10 +619,10 @@ pub mod tests {
                 let mut other_sync = other.start_sync();
 
                 loop {
-                    if let Some(message) = database_sync.tx(&mut database)? {
-                        other_sync.rx(&mut other, &message)?;
-                    } else if let Some(message) = other_sync.tx(&mut other)? {
-                        database_sync.rx(&mut database, &message)?;
+                    if let Some(message) = database_sync.tx(&mut database).await? {
+                        other_sync.rx(&mut other, message).await?;
+                    } else if let Some(message) = other_sync.tx(&mut other).await? {
+                        database_sync.rx(&mut database, message).await?;
                     } else {
                         break;
                     }

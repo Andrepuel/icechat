@@ -24,20 +24,25 @@ where
         }
     }
 
-    pub fn pre_wait(&mut self, database: &mut S::Database) -> PipeSyncResult<()> {
-        match &mut self.pending {
-            Some(PipeSyncPending::Rx(message)) => {
-                let message = std::mem::take(message);
-                self.sync.rx(database, &message)?;
-                self.pending = None;
-                self.pre_wait(database)?;
-            }
-            Some(PipeSyncPending::Tx(_)) => {}
-            None => {
-                if let Some(message) = self.sync.tx(database)? {
-                    self.pending = Some(PipeSyncPending::Tx(message));
+    pub async fn pre_wait(&mut self, database: &mut S::Database) -> PipeSyncResult<()> {
+        loop {
+            match &mut self.pending {
+                Some(PipeSyncPending::Rx(message)) => {
+                    let message = std::mem::take(message);
+                    let message = bincode::deserialize(&message)?;
+                    self.sync.rx(database, message).await?;
+                    self.pending = None;
+                    continue;
+                }
+                Some(PipeSyncPending::Tx(_)) => {}
+                None => {
+                    if let Some(message) = self.sync.tx(database).await? {
+                        let message = bincode::serialize(&message)?;
+                        self.pending = Some(PipeSyncPending::Tx(message));
+                    }
                 }
             }
+            break;
         }
 
         Ok(())
@@ -112,6 +117,11 @@ impl From<StreamError> for PipeSyncError {
         }
     }
 }
+impl From<bincode::Error> for PipeSyncError {
+    fn from(error: bincode::Error) -> Self {
+        PipeSyncError::IoError(io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+}
 pub type PipeSyncResult<T> = Result<T, PipeSyncError>;
 
 #[cfg(test)]
@@ -121,6 +131,7 @@ pub mod tests {
         channel_pipe::ChannelPipe,
         database::{error::DatabaseResult, DbSync},
     };
+    use futures_util::{future::LocalBoxFuture, FutureExt};
     use std::time::Duration;
 
     struct CountSync {
@@ -141,24 +152,37 @@ pub mod tests {
     }
     impl DbSync for CountSync {
         type Database = Vec<i32>;
+        type Message = i32;
 
-        fn tx(&mut self, database: &mut Self::Database) -> DatabaseResult<Option<Vec<u8>>> {
-            if self.wait || self.pos >= self.end {
-                return Ok(None);
+        fn tx<'a>(
+            &'a mut self,
+            database: &'a mut Self::Database,
+        ) -> LocalBoxFuture<'a, DatabaseResult<Option<i32>>> {
+            async move {
+                if self.wait || self.pos >= self.end {
+                    return Ok(None);
+                }
+                self.wait = true;
+                let pos = self.pos;
+                self.pos += 1;
+
+                Ok(Some(database[pos]))
             }
-            self.wait = true;
-            let pos = self.pos;
-            self.pos += 1;
-
-            Ok(Some(vec![database[pos] as u8]))
+            .boxed_local()
         }
 
-        fn rx(&mut self, database: &mut Self::Database, message: &[u8]) -> DatabaseResult<()> {
-            assert_eq!(message.len(), 1);
-            self.wait = false;
-            database.push(message[0] as i32);
+        fn rx<'a>(
+            &'a mut self,
+            database: &'a mut Self::Database,
+            message: i32,
+        ) -> LocalBoxFuture<'a, DatabaseResult<()>> {
+            async move {
+                self.wait = false;
+                database.push(message);
 
-            Ok(())
+                Ok(())
+            }
+            .boxed_local()
         }
     }
 
@@ -175,8 +199,8 @@ pub mod tests {
         let mut sync_b = PipeSync::new(sync_b, pipe_b);
 
         loop {
-            sync_a.pre_wait(&mut alice)?;
-            sync_b.pre_wait(&mut bob)?;
+            sync_a.pre_wait(&mut alice).await?;
+            sync_b.pre_wait(&mut bob).await?;
             tokio::select! {
                 value = sync_a.wait() => {
                     sync_a.then(value?).await?;

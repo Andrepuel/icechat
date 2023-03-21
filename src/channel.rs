@@ -40,10 +40,10 @@ impl<S: DbSync> Channel<S> {
         self.state.label()
     }
 
-    pub fn pre_wait(&mut self, database: &mut S::Database) {
+    pub async fn pre_wait(&mut self, database: &mut S::Database) {
         let state = std::mem::take(&mut self.state);
 
-        let r = Self::pre_wait_impl(state, database);
+        let r = Self::pre_wait_impl(state, database).await;
 
         match r {
             Ok(state) => {
@@ -56,7 +56,7 @@ impl<S: DbSync> Channel<S> {
         };
     }
 
-    fn pre_wait_impl(
+    async fn pre_wait_impl(
         state: ChannelState<S>,
         database: &mut S::Database,
     ) -> PipeSyncResult<ChannelState<S>> {
@@ -66,7 +66,7 @@ impl<S: DbSync> Channel<S> {
                     return Ok(ChannelState::Offline);
                 }
 
-                sync.pre_wait(database)?;
+                sync.pre_wait(database).await?;
                 Ok(ChannelState::Connected(sync))
             }
             state => Ok(state),

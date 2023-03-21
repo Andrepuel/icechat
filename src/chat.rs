@@ -199,7 +199,7 @@ impl Chat {
             if sync.state() == ChannelStateLabel::Offline {
                 sync.connect(self.database.start_sync());
             }
-            sync.pre_wait(&mut self.database);
+            sync.pre_wait(&mut self.database).await;
         }
 
         let (value, index, _) =
