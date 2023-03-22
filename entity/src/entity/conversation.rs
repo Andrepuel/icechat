@@ -22,8 +22,6 @@ pub enum Relation {
     Channel,
     #[sea_orm(has_many = "super::message::Entity")]
     Message,
-    #[sea_orm(has_many = "super::sync::Entity")]
-    Sync,
 }
 
 impl Related<super::channel::Entity> for Entity {
@@ -35,12 +33,6 @@ impl Related<super::channel::Entity> for Entity {
 impl Related<super::message::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Message.def()
-    }
-}
-
-impl Related<super::sync::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Sync.def()
     }
 }
 

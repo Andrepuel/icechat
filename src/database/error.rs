@@ -1,7 +1,10 @@
 use automerge::{sync::ReadMessageError, AutomergeError, ObjType};
+use sea_orm::DbErr;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DatabaseError {
+    #[error(transparent)]
+    DbErr(#[from] DbErr),
     #[error(transparent)]
     AutomergeError(#[from] AutomergeError),
     #[error(transparent)]

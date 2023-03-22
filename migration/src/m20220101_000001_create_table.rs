@@ -55,7 +55,7 @@ impl MigrationTrait for Migration {
                             .to(Key::Table, Id)
                             .on_delete(ForeignKeyAction::Restrict),
                     )
-                    .col(ColumnDef::new(Local::Private).string().not_null())
+                    .col(ColumnDef::new(Local::Private).binary().not_null())
                     .to_owned(),
             )
             .await?;
@@ -173,13 +173,6 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Sync::Table)
                     .col_id()
-                    .col(ColumnDef::new(Sync::Conversation).integer())
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(Sync::Table, Sync::Conversation)
-                            .to(Conversation::Table, Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
                     .col(ColumnDef::new(Sync::Payload).binary().not_null())
                     .to_owned(),
             )
@@ -372,7 +365,6 @@ enum Channel {
 #[derive(Iden)]
 enum Sync {
     Table,
-    Conversation,
     Payload,
 }
 

@@ -1,5 +1,6 @@
 pub mod doc_ex;
 pub mod error;
+pub mod sqlite_sync;
 pub mod sync;
 
 use self::error::{DatabaseError, DatabaseResult};

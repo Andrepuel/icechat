@@ -7,26 +7,10 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    pub conversation: Option<i32>,
     pub payload: Vec<u8>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::conversation::Entity",
-        from = "Column::Conversation",
-        to = "super::conversation::Column::Id",
-        on_update = "NoAction",
-        on_delete = "Cascade"
-    )]
-    Conversation,
-}
-
-impl Related<super::conversation::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Conversation.def()
-    }
-}
+pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}

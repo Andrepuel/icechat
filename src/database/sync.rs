@@ -5,17 +5,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use uuid::Uuid;
 
-pub trait PatchDataSource {
-    fn next(&mut self) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>>;
-    fn ack(&mut self, id: PatchDataId) -> LocalBoxFuture<DatabaseResult<()>>;
-    fn merge(&mut self, data: SyncData) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>>;
-    fn save(&mut self, data: SyncData) -> LocalBoxFuture<DatabaseResult<()>>;
+pub trait SyncDataSource {
+    type Ctx: Copy;
+
+    fn next(&mut self, ctx: Self::Ctx) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>>;
+    fn ack(&mut self, ctx: Self::Ctx, id: SyncDataId) -> LocalBoxFuture<DatabaseResult<()>>;
+    fn merge(
+        &mut self,
+        ctx: Self::Ctx,
+        data: SyncData,
+    ) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>>;
+    fn save(&mut self, ctx: Self::Ctx, data: SyncData) -> LocalBoxFuture<DatabaseResult<()>>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SyncData {
-    id: PatchDataId,
-    payload: Patch,
+    pub id: SyncDataId,
+    pub payload: Patch,
 }
 impl Default for SyncData {
     fn default() -> Self {
@@ -48,46 +54,46 @@ impl SyncData {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PatchDataId {
+pub enum SyncDataId {
     Global(i32),
     InitialSync(i32),
 }
-impl From<i32> for PatchDataId {
+impl From<i32> for SyncDataId {
     fn from(value: i32) -> Self {
-        PatchDataId::Global(value)
+        SyncDataId::Global(value)
     }
 }
-impl PatchDataId {
+impl SyncDataId {
     pub fn global(self) -> i32 {
         match self {
-            PatchDataId::Global(global) => global,
-            PatchDataId::InitialSync(_) => panic!("Id is not global"),
+            SyncDataId::Global(global) => global,
+            SyncDataId::InitialSync(_) => panic!("Id is not global"),
         }
     }
 }
-impl Default for PatchDataId {
+impl Default for SyncDataId {
     fn default() -> Self {
-        PatchDataId::Global(Default::default())
+        SyncDataId::Global(Default::default())
     }
 }
 
-pub struct PatchSync<S: PatchDataSource> {
+pub struct PatchSync<S: SyncDataSource> {
     author: Author,
     conversation: Uuid,
+    ctx: S::Ctx,
     tx: VecDeque<PatchSyncMessage>,
-    _marker: std::marker::PhantomData<S>,
 }
-impl<S: PatchDataSource> PatchSync<S> {
-    pub fn new(author: Author, conversation: Uuid) -> Self {
+impl<S: SyncDataSource> PatchSync<S> {
+    pub fn new(ctx: S::Ctx, author: Author, conversation: Uuid) -> Self {
         PatchSync {
             author,
             conversation,
+            ctx,
             tx: Default::default(),
-            _marker: Default::default(),
         }
     }
 }
-impl<S: PatchDataSource> DbSync for PatchSync<S> {
+impl<S: SyncDataSource> DbSync for PatchSync<S> {
     type Database = S;
     type Message = PatchSyncMessage;
 
@@ -101,7 +107,7 @@ impl<S: PatchDataSource> DbSync for PatchSync<S> {
                     return Ok(Some(next));
                 }
 
-                let Some(next) = database.next().await? else {
+                let Some(next) = database.next(self.ctx).await? else {
                     return Ok(None);
                 };
 
@@ -111,7 +117,7 @@ impl<S: PatchDataSource> DbSync for PatchSync<S> {
                     .unwrap_or(false);
 
                 if next.author() == self.author || skip_by_conversation {
-                    database.ack(next.id).await?;
+                    database.ack(self.ctx, next.id).await?;
                     continue;
                 }
                 break Ok(Some(PatchSyncMessage::Data(next)));
@@ -135,14 +141,14 @@ impl<S: PatchDataSource> DbSync for PatchSync<S> {
                         .unwrap_or(true);
 
                     if valid_conversation {
-                        if let Some(data) = database.merge(data).await? {
-                            database.save(data).await?;
+                        if let Some(data) = database.merge(self.ctx, data).await? {
+                            database.save(self.ctx, data).await?;
                         }
                     }
 
                     self.tx.push_back(PatchSyncMessage::Ack(id));
                 }
-                PatchSyncMessage::Ack(id) => database.ack(id).await?,
+                PatchSyncMessage::Ack(id) => database.ack(self.ctx, id).await?,
             }
 
             Ok(())
@@ -154,7 +160,7 @@ impl<S: PatchDataSource> DbSync for PatchSync<S> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PatchSyncMessage {
     Data(SyncData),
-    Ack(PatchDataId),
+    Ack(SyncDataId),
 }
 impl From<SyncData> for PatchSyncMessage {
     fn from(value: SyncData) -> Self {
@@ -197,10 +203,12 @@ pub mod tests {
     struct SourceMock {
         patches: Vec<SyncData>,
         minimum_ack: i32,
-        merged: HashSet<PatchDataId>,
+        merged: HashSet<SyncDataId>,
     }
-    impl PatchDataSource for SourceMock {
-        fn next(&mut self) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
+    impl SyncDataSource for SourceMock {
+        type Ctx = ();
+
+        fn next(&mut self, _ctx: Self::Ctx) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
             async move {
                 let minimum = self.minimum_ack;
                 Ok(self
@@ -212,7 +220,7 @@ pub mod tests {
             .boxed_local()
         }
 
-        fn ack(&mut self, id: PatchDataId) -> LocalBoxFuture<DatabaseResult<()>> {
+        fn ack(&mut self, _ctx: Self::Ctx, id: SyncDataId) -> LocalBoxFuture<DatabaseResult<()>> {
             async move {
                 self.minimum_ack = self.minimum_ack.max(id.global());
 
@@ -221,7 +229,11 @@ pub mod tests {
             .boxed_local()
         }
 
-        fn merge(&mut self, data: SyncData) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
+        fn merge(
+            &mut self,
+            _ctx: Self::Ctx,
+            data: SyncData,
+        ) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
             async move {
                 Ok(match self.merged.insert(data.id) {
                     true => Some(data),
@@ -231,7 +243,7 @@ pub mod tests {
             .boxed_local()
         }
 
-        fn save(&mut self, data: SyncData) -> LocalBoxFuture<DatabaseResult<()>> {
+        fn save(&mut self, _ctx: Self::Ctx, data: SyncData) -> LocalBoxFuture<DatabaseResult<()>> {
             async move {
                 self.patches.push(data);
                 Ok(())
@@ -336,7 +348,7 @@ pub mod tests {
         #[fixture]
         fn given() -> Given {
             let source = Default::default();
-            let sync = PatchSync::new(PEER, SAME_CONVERSATION);
+            let sync = PatchSync::new((), PEER, SAME_CONVERSATION);
 
             (source, sync)
         }
@@ -511,7 +523,7 @@ pub mod tests {
 
             assert_eq!(
                 source.merged.into_iter().collect::<Vec<_>>(),
-                vec![PatchDataId::Global(37)]
+                vec![SyncDataId::Global(37)]
             );
         }
 
