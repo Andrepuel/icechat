@@ -155,6 +155,18 @@ pub mod tests {
         }
 
         #[tokio::test]
+        async fn on_merging_identical_value_nothing_is_done() {
+            let newer_value = CrdtValueMock(0, 4, 7);
+            let mut list = CrdtValueTransactionMock(vec![newer_value]);
+
+            let new_value = CrdtValueMock(0, 4, 7);
+            let inserted = list.merge(new_value).await;
+
+            assert_eq!(inserted, None);
+            assert_eq!(list.0, [newer_value]);
+        }
+
+        #[tokio::test]
         async fn on_merging_newer_value_it_is_returned_and_added() {
             let older_value = CrdtValueMock(0, 2, 7);
             let mut list = CrdtValueTransactionMock(vec![older_value]);

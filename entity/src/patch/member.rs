@@ -1,7 +1,7 @@
 use super::Key;
 use crate::{
-    crdt::CrdtAddOnly,
-    entity::{conversation, key},
+    crdt::{Author, CrdtAddOnly},
+    entity::{conversation, key, member},
     uuid::UuidValue,
 };
 use serde::{Deserialize, Serialize};
@@ -13,14 +13,14 @@ pub struct Member {
     pub conversation: Uuid,
     pub crdt: CrdtAddOnly,
 }
-impl From<(key::Model, conversation::Model)> for Member {
-    fn from((key, conversation): (key::Model, conversation::Model)) -> Self {
+impl From<(key::Model, member::Model, conversation::Model)> for Member {
+    fn from((key, member, conversation): (key::Model, member::Model, conversation::Model)) -> Self {
         let conversation = conversation.get_uuid();
 
         Member {
             key: Key::new(key.public).expect("Inconsistent database"),
             conversation: conversation.into(),
-            crdt: CrdtAddOnly,
+            crdt: CrdtAddOnly(Author(member.crdt_author)),
         }
     }
 }

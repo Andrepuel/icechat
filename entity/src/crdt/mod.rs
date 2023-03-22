@@ -25,10 +25,10 @@ pub trait CrdtOrd: Ord + Default + Sized {
 }
 
 #[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CrdtAddOnly;
+pub struct CrdtAddOnly(pub Author);
 impl CrdtOrd for CrdtAddOnly {
-    fn next(&self, _author: Author) -> Self {
-        CrdtAddOnly
+    fn next(&self, author: Author) -> Self {
+        CrdtAddOnly(author)
     }
 }
 
@@ -41,7 +41,7 @@ pub trait CrdtTransaction<V: CrdtInstance + 'static> {
             let existent = existent_rowid.as_ref().map(|(_, existent)| existent);
 
             if let Some(existent) = existent {
-                if existent.crdt() > value.crdt() {
+                if existent.crdt() >= value.crdt() {
                     return None;
                 }
             }

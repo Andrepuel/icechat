@@ -95,6 +95,7 @@ impl MigrationTrait for Migration {
                             .col(Member::Contact)
                             .col(Member::Conversation),
                     )
+                    .crdt_add_only()
                     .to_owned(),
             )
             .await?;
@@ -178,13 +179,6 @@ impl MigrationTrait for Migration {
                             .from(Sync::Table, Sync::Conversation)
                             .to(Conversation::Table, Id)
                             .on_delete(ForeignKeyAction::Cascade),
-                    )
-                    .col(ColumnDef::new(Sync::From).integer())
-                    .foreign_key(
-                        ForeignKey::create()
-                            .from(Sync::Table, Sync::From)
-                            .to(Channel::Table, Id)
-                            .on_delete(ForeignKeyAction::SetNull),
                     )
                     .col(ColumnDef::new(Sync::Payload).binary().not_null())
                     .to_owned(),
@@ -318,6 +312,11 @@ trait TableConcepts: BorrowMut<TableCreateStatement> {
         self.typed()
             .col(ColumnDef::new(Crdt::CrdtSequence).integer().not_null())
     }
+
+    fn crdt_add_only(&mut self) -> &mut TableCreateStatement {
+        self.typed()
+            .col(ColumnDef::new(Crdt::CrdtAuthor).integer().not_null())
+    }
 }
 
 #[derive(Iden)]
@@ -374,7 +373,6 @@ enum Channel {
 enum Sync {
     Table,
     Conversation,
-    From,
     Payload,
 }
 

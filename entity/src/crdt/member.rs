@@ -18,10 +18,12 @@ impl CrdtInstance for Member {
     }
 
     fn crdt(&self) -> Self::Crdt {
-        CrdtAddOnly
+        self.crdt
     }
 
-    fn set_crdt(&mut self, _crdt: Self::Crdt) {}
+    fn set_crdt(&mut self, crdt: Self::Crdt) {
+        self.crdt = crdt;
+    }
 }
 
 impl CrdtTransaction<Member> for DatabaseTransaction {
@@ -40,6 +42,7 @@ impl CrdtTransaction<Member> for DatabaseTransaction {
                 member::ActiveModel {
                     contact: ActiveValue::Set(contact.key),
                     conversation: ActiveValue::Set(conversation.id),
+                    crdt_author: ActiveValue::Set(value.crdt.0 .0),
                 }
                 .insert(self)
                 .await
@@ -67,7 +70,7 @@ impl CrdtTransaction<Member> for DatabaseTransaction {
                 .unwrap()
                 .map(move |model| {
                     let id = (model.contact, model.conversation);
-                    (id, (key, conversation).into())
+                    (id, (key, model, conversation).into())
                 })
         }
         .boxed_local()

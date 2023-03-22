@@ -8,20 +8,11 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub conversation: Option<i32>,
-    pub from: Option<i32>,
     pub payload: Vec<u8>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::channel::Entity",
-        from = "Column::From",
-        to = "super::channel::Column::Id",
-        on_update = "NoAction",
-        on_delete = "SetNull"
-    )]
-    Channel,
     #[sea_orm(
         belongs_to = "super::conversation::Entity",
         from = "Column::Conversation",
@@ -30,12 +21,6 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Conversation,
-}
-
-impl Related<super::channel::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Channel.def()
-    }
 }
 
 impl Related<super::conversation::Entity> for Entity {

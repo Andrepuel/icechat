@@ -9,6 +9,7 @@ pub struct Model {
     pub contact: i32,
     #[sea_orm(primary_key, auto_increment = false)]
     pub conversation: i32,
+    pub crdt_author: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

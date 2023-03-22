@@ -32,8 +32,6 @@ pub enum Relation {
         on_delete = "Restrict"
     )]
     Key,
-    #[sea_orm(has_many = "super::sync::Entity")]
-    Sync,
 }
 
 impl Related<super::conversation::Entity> for Entity {
@@ -51,12 +49,6 @@ impl Related<super::initial_sync::Entity> for Entity {
 impl Related<super::key::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Key.def()
-    }
-}
-
-impl Related<super::sync::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Sync.def()
     }
 }
 

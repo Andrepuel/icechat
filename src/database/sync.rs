@@ -15,14 +15,12 @@ pub trait PatchDataSource {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SyncData {
     id: PatchDataId,
-    author: Author,
     payload: Patch,
 }
 impl Default for SyncData {
     fn default() -> Self {
         SyncData {
             id: Default::default(),
-            author: Default::default(),
             payload: Patch::Contact(Default::default()),
         }
     }
@@ -35,6 +33,16 @@ impl SyncData {
             Patch::Member(member) => Some(member.conversation),
             Patch::NewMessage(message) => Some(message.conversation),
             Patch::MessageStatus(status) => Some(status.conversation),
+        }
+    }
+
+    pub fn author(&self) -> Author {
+        match &self.payload {
+            Patch::Contact(contact) => contact.crdt.author,
+            Patch::Conversation(conversation) => conversation.crdt.author,
+            Patch::Member(member) => member.crdt.0,
+            Patch::NewMessage(message) => message.crdt.writable.author,
+            Patch::MessageStatus(message) => message.crdt.author,
         }
     }
 }
@@ -102,7 +110,7 @@ impl<S: PatchDataSource> DbSync for PatchSync<S> {
                     .map(|conversation| conversation != self.conversation)
                     .unwrap_or(false);
 
-                if next.author == self.author || skip_by_conversation {
+                if next.author() == self.author || skip_by_conversation {
                     database.ack(next.id).await?;
                     continue;
                 }
@@ -157,12 +165,31 @@ impl From<SyncData> for PatchSyncMessage {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use entity::patch::{Conversation, Member, MessageStatus, NewMessage};
+    use entity::{
+        crdt::{sequence::CrdtWritableSequence, writable::CrdtWritable},
+        patch::{Contact, Conversation, Key, Member, MessageStatus, NewMessage},
+    };
     use rstest::*;
     use std::collections::HashSet;
 
     const PEER: Author = Author(3);
     const USER: Author = Author(5);
+    const PEER_PATCH: Patch = Patch::Contact(Contact {
+        key: Key::zero(),
+        name: String::new(),
+        crdt: CrdtWritable {
+            author: PEER,
+            generation: 0,
+        },
+    });
+    const USER_PATCH: Patch = Patch::Contact(Contact {
+        key: Key::zero(),
+        name: String::new(),
+        crdt: CrdtWritable {
+            author: USER,
+            generation: 0,
+        },
+    });
     const SAME_CONVERSATION: Uuid = Uuid::from_u128(3);
     const OTHER_CONVERSATION: Uuid = Uuid::from_u128(5);
 
@@ -230,21 +257,49 @@ pub mod tests {
 
         assert_eq!(sync_data.conversation(), conversation)
     }
+
+    #[rstest]
+    #[case(a_contact_patch(), USER)]
+    #[case(a_conversation_patch(), USER)]
+    #[case(a_member_patch(), USER)]
+    #[case(a_message_patch(), USER)]
+    #[case(a_message_status_patch(), USER)]
+    fn given_a_sync_data_the_author_is_inferred_from_the_patch(
+        #[case] patch: Patch,
+        #[case] author: Author,
+    ) {
+        let sync_data = SyncData {
+            id: 37.into(),
+            payload: patch,
+        };
+
+        assert_eq!(sync_data.author(), author);
+    }
+
     fn a_contact_patch() -> Patch {
-        Patch::Contact(Default::default())
+        Patch::Contact(Contact {
+            crdt: CrdtWritable {
+                author: USER,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
     }
     fn a_conversation_patch() -> Patch {
         Patch::Conversation(Conversation {
             id: SAME_CONVERSATION,
             title: Default::default(),
-            crdt: Default::default(),
+            crdt: CrdtWritable {
+                author: USER,
+                ..Default::default()
+            },
         })
     }
     fn a_member_patch() -> Patch {
         Patch::Member(Member {
             key: Default::default(),
             conversation: SAME_CONVERSATION,
-            crdt: entity::crdt::CrdtAddOnly,
+            crdt: entity::crdt::CrdtAddOnly(USER),
         })
     }
     fn a_message_patch() -> Patch {
@@ -253,7 +308,13 @@ pub mod tests {
             from: Default::default(),
             conversation: SAME_CONVERSATION,
             text: Default::default(),
-            crdt: Default::default(),
+            crdt: CrdtWritableSequence {
+                writable: CrdtWritable {
+                    author: USER,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
         })
     }
     fn a_message_status_patch() -> Patch {
@@ -261,7 +322,10 @@ pub mod tests {
             id: Default::default(),
             conversation: SAME_CONVERSATION,
             status: Default::default(),
-            crdt: Default::default(),
+            crdt: CrdtWritable {
+                author: USER,
+                ..Default::default()
+            },
         })
     }
 
@@ -285,8 +349,7 @@ pub mod tests {
             let (mut source, mut sync, ..) = given;
             let data = SyncData {
                 id: 37.into(),
-                author: USER,
-                ..Default::default()
+                payload: USER_PATCH,
             };
             source.patches = vec![data];
 
@@ -302,8 +365,7 @@ pub mod tests {
                 let (mut source, mut sync) = super::given();
                 let data = SyncData {
                     id: 37.into(),
-                    author: PEER,
-                    ..Default::default()
+                    payload: PEER_PATCH,
                 };
 
                 sync.rx(&mut source, PatchSyncMessage::Data(data.clone()))
@@ -345,8 +407,7 @@ pub mod tests {
                 let (mut source, mut sync) = super::given();
                 let data = SyncData {
                     id: 37.into(),
-                    author: PEER,
-                    ..Default::default()
+                    payload: PEER_PATCH,
                 };
 
                 source.merged.insert(data.id);
@@ -393,11 +454,13 @@ pub mod tests {
 
                 let diff_conv = SyncData {
                     id: 37.into(),
-                    author: PEER,
                     payload: Patch::Conversation(Conversation {
                         id: OTHER_CONVERSATION,
                         title: Default::default(),
-                        crdt: Default::default(),
+                        crdt: CrdtWritable {
+                            author: PEER,
+                            ..Default::default()
+                        },
                     }),
                 };
 
@@ -434,11 +497,13 @@ pub mod tests {
 
             let correct_conv = SyncData {
                 id: 37.into(),
-                author: PEER,
                 payload: Patch::Conversation(Conversation {
                     id: SAME_CONVERSATION,
                     title: Default::default(),
-                    crdt: Default::default(),
+                    crdt: CrdtWritable {
+                        author: PEER,
+                        ..Default::default()
+                    },
                 }),
             };
 
@@ -459,8 +524,7 @@ pub mod tests {
                 let (mut source, sync) = super::given();
                 let data = SyncData {
                     id: 37.into(),
-                    author: PEER,
-                    ..Default::default()
+                    payload: PEER_PATCH,
                 };
                 source.patches.push(data.clone());
 
@@ -496,8 +560,7 @@ pub mod tests {
 
                 let another = SyncData {
                     id: (data.id.global() + 1).into(),
-                    author: USER,
-                    ..data.clone()
+                    payload: USER_PATCH,
                 };
                 source.patches.push(another.clone());
 
@@ -517,11 +580,13 @@ pub mod tests {
 
                 let data = SyncData {
                     id: 37.into(),
-                    author: USER,
                     payload: Patch::Conversation(Conversation {
                         id: OTHER_CONVERSATION,
                         title: Default::default(),
-                        crdt: Default::default(),
+                        crdt: CrdtWritable {
+                            author: USER,
+                            ..Default::default()
+                        },
                     }),
                 };
 
@@ -562,7 +627,6 @@ pub mod tests {
                         title: Default::default(),
                         crdt: Default::default(),
                     }),
-                    ..data.clone()
                 };
                 source.patches.push(another.clone());
 

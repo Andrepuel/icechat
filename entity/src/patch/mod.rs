@@ -78,6 +78,10 @@ impl Key {
         Ok(Key(key))
     }
 
+    pub const fn zero() -> Key {
+        Key(Vec::new())
+    }
+
     pub async fn get_or_create(&self, trans: &DatabaseTransaction) -> key::Model {
         let existent = key::Entity::find()
             .filter(key::Column::Public.eq(self.0.clone()))
