@@ -52,6 +52,8 @@ impl CrdtTransaction<NewMessage> for DatabaseTransaction {
                 crdt_generation: ActiveValue::Set(message.crdt.writable.generation),
                 crdt_author: ActiveValue::Set(message.crdt.writable.author.0),
                 crdt_sequence: ActiveValue::Set(message.crdt.sequence),
+                status_crdt_generation: ActiveValue::NotSet,
+                status_crdt_author: ActiveValue::NotSet,
             };
 
             match existent {
@@ -60,6 +62,8 @@ impl CrdtTransaction<NewMessage> for DatabaseTransaction {
                 }
                 None => {
                     let uuid = SplitUuid::from(message.id);
+                    active.status_crdt_generation = ActiveValue::Set(0);
+                    active.status_crdt_author = ActiveValue::Set(0);
                     active.uuid0 = ActiveValue::Set(uuid.0);
                     active.uuid1 = ActiveValue::Set(uuid.1);
                     active.uuid2 = ActiveValue::Set(uuid.2);
@@ -144,8 +148,8 @@ impl CrdtTransaction<MessageStatus> for DatabaseTransaction {
                     id: ActiveValue::Unchanged(id),
                     status: ActiveValue::Set(status.status),
                     conversation: ActiveValue::Set(conversation.id),
-                    crdt_generation: ActiveValue::Set(status.crdt.generation),
-                    crdt_author: ActiveValue::Set(status.crdt.author.0),
+                    status_crdt_generation: ActiveValue::Set(status.crdt.generation),
+                    status_crdt_author: ActiveValue::Set(status.crdt.author.0),
                     ..Default::default()
                 },
                 None => {
@@ -162,6 +166,8 @@ impl CrdtTransaction<MessageStatus> for DatabaseTransaction {
                         from: ActiveValue::Set(from.id),
                         conversation: ActiveValue::Set(conversation.id),
                         text: ActiveValue::Set(Default::default()),
+                        status_crdt_generation: ActiveValue::Set(status.crdt.generation),
+                        status_crdt_author: ActiveValue::Set(status.crdt.author.0),
                         crdt_generation: ActiveValue::Set(0),
                         crdt_author: ActiveValue::Set(0),
                         crdt_sequence: ActiveValue::Set(0),

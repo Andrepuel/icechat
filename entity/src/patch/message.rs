@@ -58,8 +58,8 @@ impl From<(message::Model, conversation::Model)> for MessageStatus {
             conversation: conversation.into(),
             status: message.status,
             crdt: CrdtWritable {
-                author: Author(message.crdt_author),
-                generation: message.crdt_generation,
+                author: Author(message.status_crdt_author),
+                generation: message.status_crdt_generation,
             },
         }
     }

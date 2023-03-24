@@ -129,6 +129,10 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Message::Text).text().not_null())
                     .crdt_writable()
+                    .alternative_crdt_writable(
+                        Message::StatusCrdtGeneration,
+                        Message::StatusCrdtAuthor,
+                    )
                     .crdt_sequence()
                     .to_owned(),
             )
@@ -296,9 +300,19 @@ trait TableConcepts: BorrowMut<TableCreateStatement> {
     }
 
     fn crdt_writable(&mut self) -> &mut TableCreateStatement {
+        let gen = Crdt::CrdtGeneration;
+        let author = Crdt::CrdtAuthor;
+        self.alternative_crdt_writable(gen, author)
+    }
+
+    fn alternative_crdt_writable<T: IntoIden>(
+        &mut self,
+        gen: T,
+        author: T,
+    ) -> &mut TableCreateStatement {
         self.typed()
-            .col(ColumnDef::new(Crdt::CrdtGeneration).integer().not_null())
-            .col(ColumnDef::new(Crdt::CrdtAuthor).integer().not_null())
+            .col(ColumnDef::new(gen).integer().not_null())
+            .col(ColumnDef::new(author).integer().not_null())
     }
 
     fn crdt_sequence(&mut self) -> &mut TableCreateStatement {
@@ -352,6 +366,8 @@ enum Message {
     From,
     Conversation,
     Text,
+    StatusCrdtGeneration,
+    StatusCrdtAuthor,
 }
 
 #[derive(Iden)]

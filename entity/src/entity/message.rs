@@ -17,6 +17,8 @@ pub struct Model {
     pub text: String,
     pub crdt_generation: i32,
     pub crdt_author: i32,
+    pub status_crdt_generation: i32,
+    pub status_crdt_author: i32,
     pub crdt_sequence: i32,
 }
 
