@@ -1,5 +1,7 @@
 use super::{
-    sequence::CrdtWritableSequence, writable::CrdtWritable, CrdtInstance, CrdtTransaction,
+    sequence::{CrdtWritableSequence, CrdtWritableSequenceTransaction},
+    writable::CrdtWritable,
+    Author, CrdtInstance, CrdtTransaction,
 };
 use crate::{
     entity::{conversation, key, message},
@@ -7,7 +9,10 @@ use crate::{
     uuid::SplitUuid,
 };
 use futures::{future::LocalBoxFuture, FutureExt};
-use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseTransaction, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, Order,
+    QueryFilter, QueryOrder,
+};
 use uuid::Uuid;
 
 impl CrdtInstance for NewMessage {
@@ -110,6 +115,31 @@ impl CrdtTransaction<NewMessage> for DatabaseTransaction {
             let id = message.id;
 
             Some((id, NewMessage::from((message, from, conversation))))
+        }
+        .boxed_local()
+    }
+}
+impl CrdtWritableSequenceTransaction<NewMessage> for DatabaseTransaction {
+    fn last<'a>(
+        &'a mut self,
+        group: &'a NewMessage,
+    ) -> LocalBoxFuture<'a, Option<CrdtWritableSequence>> {
+        async move {
+            let conversation = Conversation::get_or_create(group.conversation, self).await;
+            let message = message::Entity::find()
+                .filter(message::Column::Conversation.eq(conversation.id))
+                .order_by(message::Column::CrdtSequence, Order::Desc)
+                .one(self)
+                .await
+                .unwrap()?;
+
+            Some(CrdtWritableSequence {
+                writable: CrdtWritable {
+                    generation: message.crdt_generation,
+                    author: Author(message.crdt_author),
+                },
+                sequence: message.crdt_sequence,
+            })
         }
         .boxed_local()
     }

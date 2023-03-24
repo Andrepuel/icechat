@@ -27,7 +27,7 @@ pub trait CrdtWritableSequenceTransaction<V: CrdtInstance<Crdt = CrdtWritableSeq
                 .map(|(_, existent)| existent.crdt())
                 .unwrap_or_default()
                 .next(author);
-            crdt.sequence = self.last().await.unwrap_or_default().sequence + 1;
+            crdt.sequence = self.last(&value).await.unwrap_or_default().sequence + 1;
             value.set_crdt(crdt);
 
             self.save(value, existent).await
@@ -35,7 +35,7 @@ pub trait CrdtWritableSequenceTransaction<V: CrdtInstance<Crdt = CrdtWritableSeq
         .boxed_local()
     }
 
-    fn last(&mut self) -> LocalBoxFuture<'_, Option<CrdtWritableSequence>>;
+    fn last<'a>(&'a mut self, group: &'a V) -> LocalBoxFuture<'a, Option<CrdtWritableSequence>>;
 }
 
 #[cfg(test)]
@@ -104,7 +104,10 @@ pub mod tests {
         }
     }
     impl CrdtWritableSequenceTransaction<CrdtSequenceMock> for CrdtWritableSequenceTransactionMock {
-        fn last(&mut self) -> LocalBoxFuture<'_, Option<CrdtWritableSequence>> {
+        fn last(
+            &mut self,
+            _group: &CrdtSequenceMock,
+        ) -> LocalBoxFuture<'_, Option<CrdtWritableSequence>> {
             async move {
                 self.0
                     .iter()
