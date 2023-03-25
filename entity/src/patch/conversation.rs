@@ -40,7 +40,7 @@ impl Conversation {
             .await
             .unwrap();
 
-        let model = match existent {
+        match existent {
             Some(existent) => existent,
             None => conversation::ActiveModel {
                 id: ActiveValue::NotSet,
@@ -55,8 +55,6 @@ impl Conversation {
             .insert(trans)
             .await
             .unwrap(),
-        };
-
-        model
+        }
     }
 }

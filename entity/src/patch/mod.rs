@@ -89,7 +89,7 @@ impl Key {
             .await
             .unwrap();
 
-        let model = match existent {
+        match existent {
             Some(existent) => existent,
             None => key::ActiveModel {
                 id: ActiveValue::NotSet,
@@ -98,9 +98,7 @@ impl Key {
             .insert(trans)
             .await
             .unwrap(),
-        };
-
-        model
+        }
     }
 }
 
