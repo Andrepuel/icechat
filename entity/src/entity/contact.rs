@@ -22,6 +22,8 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Key,
+    #[sea_orm(has_many = "super::member::Entity")]
+    Member,
     #[sea_orm(has_many = "super::message::Entity")]
     Message,
 }
@@ -32,18 +34,15 @@ impl Related<super::key::Entity> for Entity {
     }
 }
 
-impl Related<super::message::Entity> for Entity {
+impl Related<super::member::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::Message.def()
+        Relation::Member.def()
     }
 }
 
-impl Related<super::conversation::Entity> for Entity {
+impl Related<super::message::Entity> for Entity {
     fn to() -> RelationDef {
-        super::member::Relation::Conversation.def()
-    }
-    fn via() -> Option<RelationDef> {
-        Some(super::member::Relation::Contact.def().rev())
+        Relation::Message.def()
     }
 }
 

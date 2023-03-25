@@ -30,6 +30,14 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Conversation,
+    #[sea_orm(
+        belongs_to = "super::key::Entity",
+        from = "Column::Contact",
+        to = "super::key::Column::Id",
+        on_update = "NoAction",
+        on_delete = "Cascade"
+    )]
+    Key,
 }
 
 impl Related<super::contact::Entity> for Entity {
@@ -41,6 +49,12 @@ impl Related<super::contact::Entity> for Entity {
 impl Related<super::conversation::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Conversation.def()
+    }
+}
+
+impl Related<super::key::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Key.def()
     }
 }
 

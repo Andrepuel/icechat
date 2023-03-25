@@ -83,6 +83,12 @@ impl MigrationTrait for Migration {
                             .to(Contact::Table, Contact::Key)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(Member::Table, Member::Contact)
+                            .to(Key::Table, Id)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
                     .col(ColumnDef::new(Member::Conversation).integer().not_null())
                     .foreign_key(
                         ForeignKey::create()

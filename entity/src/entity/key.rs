@@ -18,6 +18,8 @@ pub enum Relation {
     Contact,
     #[sea_orm(has_many = "super::local::Entity")]
     Local,
+    #[sea_orm(has_many = "super::member::Entity")]
+    Member,
     #[sea_orm(has_many = "super::message::Entity")]
     Message,
 }
@@ -37,6 +39,12 @@ impl Related<super::contact::Entity> for Entity {
 impl Related<super::local::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Local.def()
+    }
+}
+
+impl Related<super::member::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Member.def()
     }
 }
 
