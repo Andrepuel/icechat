@@ -8,8 +8,8 @@ use entity::{
 };
 use futures_util::{future::LocalBoxFuture, FutureExt};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, IntoActiveModel,
-    ModelTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ActiveValue, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait,
+    IntoActiveModel, ModelTrait, Order, QueryFilter, QueryOrder, Statement,
 };
 
 impl SyncDataSource for DatabaseTransaction {
@@ -75,6 +75,7 @@ impl SyncDataSource for DatabaseTransaction {
                         ..channel.into_active_model()
                     };
                     channel.save(self).await?;
+                    remove_old_patches(self).await?;
 
                     Ok(())
                 }
@@ -127,4 +128,23 @@ impl SyncDataSource for DatabaseTransaction {
         }
         .boxed_local()
     }
+}
+
+async fn remove_old_patches(trans: &DatabaseTransaction) -> DatabaseResult<()> {
+    let done_sync = channel::Entity::find()
+        .order_by(channel::Column::SyncIndex, Order::Asc)
+        .one(trans)
+        .await?;
+
+    let Some(done_sync) = done_sync else { return Ok(()); };
+
+    trans
+        .execute(Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "DELETE FROM sync WHERE id <= ?;",
+            [done_sync.sync_index.into()],
+        ))
+        .await?;
+
+    Ok(())
 }
