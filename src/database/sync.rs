@@ -8,7 +8,11 @@ use uuid::Uuid;
 pub trait SyncDataSource {
     type Ctx: Copy;
 
-    fn next(&mut self, ctx: Self::Ctx) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>>;
+    fn next(
+        &mut self,
+        ctx: Self::Ctx,
+        minimum: (i32, i32),
+    ) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>>;
     fn ack(&mut self, ctx: Self::Ctx, id: SyncDataId) -> LocalBoxFuture<DatabaseResult<()>>;
     fn merge(
         &mut self,
@@ -82,6 +86,7 @@ pub struct PatchSync<S: SyncDataSource> {
     conversation: Uuid,
     ctx: S::Ctx,
     tx: VecDeque<PatchSyncMessage>,
+    minimum: (i32, i32),
 }
 impl<S: SyncDataSource> PatchSync<S> {
     pub fn new(ctx: S::Ctx, author: Author, conversation: Uuid) -> Self {
@@ -90,6 +95,7 @@ impl<S: SyncDataSource> PatchSync<S> {
             conversation,
             ctx,
             tx: Default::default(),
+            minimum: (0, 0),
         }
     }
 }
@@ -107,7 +113,7 @@ impl<S: SyncDataSource> DbSync for PatchSync<S> {
                     return Ok(Some(next));
                 }
 
-                let Some(next) = database.next(self.ctx).await? else {
+                let Some(next) = database.next(self.ctx, self.minimum).await? else {
                     return Ok(None);
                 };
 
@@ -120,6 +126,12 @@ impl<S: SyncDataSource> DbSync for PatchSync<S> {
                     database.ack(self.ctx, next.id).await?;
                     continue;
                 }
+
+                match next.id {
+                    SyncDataId::Global(id) => self.minimum.1 = id,
+                    SyncDataId::InitialSync(id) => self.minimum.0 = id,
+                }
+
                 break Ok(Some(PatchSyncMessage::Data(next)));
             }
         }
@@ -202,19 +214,30 @@ pub mod tests {
     #[derive(Clone, Default)]
     struct SourceMock {
         patches: Vec<SyncData>,
+        initial_patches: Vec<SyncData>,
         minimum_ack: i32,
         merged: HashSet<SyncDataId>,
     }
     impl SyncDataSource for SourceMock {
         type Ctx = ();
 
-        fn next(&mut self, _ctx: Self::Ctx) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
+        fn next(
+            &mut self,
+            _ctx: Self::Ctx,
+            minimum: (i32, i32),
+        ) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
             async move {
-                let minimum = self.minimum_ack;
+                let initial_patch = self.initial_patches.get(minimum.0 as usize).cloned();
+                if let Some(initial_patch) = initial_patch {
+                    return Ok(Some(initial_patch));
+                }
+
                 Ok(self
                     .patches
                     .iter()
-                    .find(|patch| patch.id.global() > minimum)
+                    .find(|patch| {
+                        patch.id.global() > self.minimum_ack && patch.id.global() > minimum.1
+                    })
                     .cloned())
             }
             .boxed_local()
@@ -367,6 +390,43 @@ pub mod tests {
 
             let tx = sync.tx(&mut source).await.unwrap();
             assert_eq!(tx, Some(PatchSyncMessage::Data(source.patches[0].clone())));
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn and_there_are_several_pending_patches_then_it_sends_each_one_patch_then_nothing_else(
+            given: Given,
+        ) {
+            let (mut source, mut sync, ..) = given;
+            let data_initial = SyncData {
+                id: SyncDataId::InitialSync(1),
+                payload: USER_PATCH,
+            };
+            let data37 = SyncData {
+                id: 37.into(),
+                payload: USER_PATCH,
+            };
+            let data38 = SyncData {
+                id: 38.into(),
+                payload: USER_PATCH,
+            };
+            source.initial_patches = vec![data_initial];
+            source.patches = vec![data37, data38];
+
+            let tx = sync.tx(&mut source).await.unwrap();
+            assert_eq!(
+                tx,
+                Some(PatchSyncMessage::Data(source.initial_patches[0].clone()))
+            );
+
+            let tx = sync.tx(&mut source).await.unwrap();
+            assert_eq!(tx, Some(PatchSyncMessage::Data(source.patches[0].clone())));
+
+            let tx = sync.tx(&mut source).await.unwrap();
+            assert_eq!(tx, Some(PatchSyncMessage::Data(source.patches[1].clone())));
+
+            let tx = sync.tx(&mut source).await.unwrap();
+            assert_eq!(tx, None);
         }
 
         mod when_it_receives_a_patch {

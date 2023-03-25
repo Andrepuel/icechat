@@ -15,10 +15,15 @@ use sea_orm::{
 impl SyncDataSource for DatabaseTransaction {
     type Ctx = i32;
 
-    fn next(&mut self, channel_id: i32) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
+    fn next(
+        &mut self,
+        channel_id: i32,
+        (min_initial, min_global): (i32, i32),
+    ) -> LocalBoxFuture<DatabaseResult<Option<SyncData>>> {
         async move {
             let initial_sync = initial_sync::Entity::find()
                 .filter(initial_sync::Column::Channel.eq(channel_id))
+                .filter(initial_sync::Column::Id.gt(min_initial))
                 .order_by(initial_sync::Column::Id, sea_orm::Order::Asc)
                 .one(self)
                 .await?;
@@ -36,6 +41,7 @@ impl SyncDataSource for DatabaseTransaction {
             let Some(channel) = channel else { return Ok(None); };
             let sync = entity::entity::sync::Entity::find()
                 .filter(entity::entity::sync::Column::Id.gt(channel.sync_index))
+                .filter(entity::entity::sync::Column::Id.gt(min_global))
                 .one(self)
                 .await?;
 
