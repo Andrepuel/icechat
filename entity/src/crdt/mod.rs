@@ -33,7 +33,7 @@ impl CrdtOrd for CrdtAddOnly {
 }
 
 pub trait CrdtTransaction<V: CrdtInstance + 'static> {
-    type RowId;
+    type RowId: Copy;
 
     fn merge(&mut self, value: V) -> LocalBoxFuture<'_, Option<V>> {
         async move {

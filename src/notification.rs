@@ -1,9 +1,10 @@
-use crate::database::{Contact, Message};
+use crate::database::Message;
 use notify_rust::Notification;
 
 pub struct NotificationManager;
 impl NotificationManager {
-    pub fn show(from: Contact, message: Message) {
+    pub fn show(message: Message) {
+        let from = message.from;
         let message = match message.content.len() {
             0..=128 => message.content,
             _ => format!(

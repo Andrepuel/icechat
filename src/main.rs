@@ -4,7 +4,6 @@ use futures_util::{future::select_all, FutureExt};
 use icechat::{
     channel::{Ed25519Cert, Ed25519Seed},
     chat::{Chat, ChatValue},
-    database::Contact,
     notification::NotificationManager,
     poll_runtime::PollRuntime,
 };
@@ -170,17 +169,16 @@ impl ConversationTab {
             egui::containers::ScrollArea::vertical().show(ui, |ui| {
                 ui.vertical(|ui| {
                     for message in self.chat.list_messages().rev() {
-                        let from = self.chat.get_peer(message.from).unwrap_or_default();
                         ui.label(format!(
                             "({state:?}) {name}",
                             state = message.status,
-                            name = from.name
+                            name = message.from.name
                         ));
                         ui.horizontal(|ui| {
                             if ui.button("⬅").clicked() {
                                 self.message = format!(
                                     "{sender} said:\n{message}\n\n",
-                                    sender = from.name,
+                                    sender = message.from.name,
                                     message = message.content
                                 );
                             }
@@ -216,11 +214,7 @@ impl ConversationTab {
                     }
 
                     ui.horizontal(|ui| {
-                        let key = self
-                            .new_channel_pub
-                            .iter()
-                            .map(|x| format!("{x:02x}"))
-                            .collect::<String>();
+                        let key = self.new_channel_pub.hex();
 
                         if ui.button("📋").clicked() {
                             ui.output().copied_text = key.clone();
@@ -244,7 +238,7 @@ impl ConversationTab {
                                 })
                                 .collect::<Vec<u8>>();
                             peer.resize(32, 0);
-                            let peer = peer.try_into().unwrap();
+                            let peer = Ed25519Cert(peer.try_into().unwrap());
 
                             self.new_channel_pub = self.new_channel_seed.public_key();
                             let channel = agree_channel(&seed, &peer);
@@ -258,10 +252,9 @@ impl ConversationTab {
                         ui.label("Name:");
                         ui.text_edit_singleline(&mut self.name);
                         if ui.button("Save").clicked() {
-                            self.chat.set_profile(Contact {
-                                name: self.name.to_string(),
-                                ..self.chat.profile()
-                            });
+                            let mut profile = self.chat.profile();
+                            profile.name = self.name.to_string();
+                            self.chat.set_profile(profile);
                             self.chat.save();
                         }
                     });
@@ -281,8 +274,7 @@ impl ConversationTab {
 
     fn poll(&mut self) {
         for message in self.chat.new_messages() {
-            let from = self.chat.get_peer(message.from).unwrap_or_default();
-            NotificationManager::show(from, message)
+            NotificationManager::show(message)
         }
     }
 }
@@ -290,7 +282,7 @@ impl ConversationTab {
 fn agree_channel(key: &Ed25519Seed, peer: &Ed25519Cert) -> String {
     let x25519_user = icepipe::curve25519_conversion::ed25519_seed_to_x25519(key.as_slice());
     let x25519_peer =
-        icepipe::curve25519_conversion::ed25519_public_key_to_x25519(peer.as_slice()).unwrap();
+        icepipe::curve25519_conversion::ed25519_public_key_to_x25519(peer.0.as_slice()).unwrap();
 
     let secret = x25519_user.diffie_hellman(&x25519_peer);
     let basekey = secret

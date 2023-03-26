@@ -1,8 +1,8 @@
 use crate::{
     channel::{Channel, ChannelStateLabel, ChannelValue, Ed25519Cert, Ed25519Seed},
     database::{
-        error::DatabaseResult, ChannelData, Contact, LocalDatabase, Message, MessageStatus,
-        SharedDatabase, UnimplementedSync,
+        error::DatabaseResult, Contact, LocalDatabase, Message, MessageStatus, SharedDatabase,
+        UnimplementedSync,
     },
 };
 use futures_util::{future::select_all, FutureExt};
@@ -61,8 +61,8 @@ impl Chat {
                 .map(|channel| {
                     Channel::new(
                         channel.channel,
-                        Ed25519Seed::new(channel.private_key.try_into().unwrap()),
-                        channel.peer_cert.try_into().unwrap(),
+                        Ed25519Seed::new(Default::default()),
+                        channel.peer_cert,
                     )
                 }),
         );
@@ -74,12 +74,6 @@ impl Chat {
     pub fn init<P: AsRef<Path>>(user: Uuid, path: P) {
         let mut settings = LocalDatabase::with_user(user).unwrap();
         let mut database = SharedDatabase::with_user(user).unwrap();
-        database
-            .add_contact(Contact {
-                uuid: user,
-                name: user.to_string(),
-            })
-            .unwrap();
 
         Self::save_with(&mut settings, &mut database, path.as_ref());
     }
@@ -98,14 +92,10 @@ impl Chat {
     }
 
     pub fn profile(&self) -> Contact {
-        self.get_peer(self.user()).unwrap_or_else(|| Contact {
-            uuid: self.user(),
-            ..Default::default()
-        })
+        self.get_peer(self.user()).unwrap()
     }
 
     pub fn set_profile(&mut self, contact: Contact) {
-        assert_eq!(contact.uuid, self.user());
         self.database.add_contact(contact).unwrap()
     }
 
@@ -114,22 +104,8 @@ impl Chat {
     }
 
     pub fn send_message(&mut self, content: String) -> Message {
-        let message = Message {
-            from: self.user(),
-            content,
-            ..Default::default()
-        };
-
-        self.database.add_message(message.clone()).unwrap();
-
-        message
-    }
-
-    pub fn list_peers(&self) -> impl DoubleEndedIterator<Item = Contact> + '_ {
-        self.database
-            .list_contact()
-            .map(Result::unwrap)
-            .filter(|contact| contact.uuid != self.user())
+        let _ = content;
+        unimplemented!()
     }
 
     pub fn list_messages(&self) -> impl DoubleEndedIterator<Item = Message> + '_ {
@@ -137,42 +113,20 @@ impl Chat {
     }
 
     pub fn new_messages(&mut self) -> Vec<Message> {
-        let user = self.user();
-
-        #[allow(clippy::needless_collect)]
-        let messages = self
-            .list_messages()
-            .enumerate()
-            .filter(|(_, message)| message.from != user && message.status == MessageStatus::Sent)
-            .collect::<Vec<_>>();
-
-        messages
-            .into_iter()
-            .map(|(index, mut message)| {
-                message.status = MessageStatus::Delivered;
-                self.database.set_message(index, &message).unwrap();
-                message
-            })
-            .collect()
+        unimplemented!()
     }
 
     pub fn set_message_status(&mut self, index: usize, status: MessageStatus) {
-        let message = self.database.list_messages().nth(index).unwrap().unwrap();
-
-        let message = Message { status, ..message };
-
-        self.database.set_message(index, &message).unwrap();
+        let _ = index;
+        let _ = status;
+        unimplemented!()
     }
 
     pub fn add_channel(&mut self, channel: String, key: Ed25519Seed, peer: Ed25519Cert) {
-        let mut data = self.settings.get().unwrap();
-        data.channels.push(ChannelData {
-            channel,
-            private_key: key.to_vec(),
-            peer_cert: peer.to_vec(),
-        });
-        self.settings.set(data).unwrap();
-        self.sync_channels();
+        let _ = channel;
+        let _ = key;
+        let _ = peer;
+        unimplemented!()
     }
 
     pub fn remove_channel(&mut self, channel: &str) {

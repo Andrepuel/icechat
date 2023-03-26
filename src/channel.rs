@@ -3,6 +3,7 @@ use crate::{
     fragmentable::Fragmentable,
     pipe_sync::{PipeSync, PipeSyncResult, PipeSyncValue},
 };
+use entity::crdt::Author;
 use futures_util::{future::LocalBoxFuture, FutureExt};
 use icepipe::{
     agreement::Ed25519PairAndPeer,
@@ -94,7 +95,7 @@ impl<S: DbSync> Channel<S> {
             }
             ChannelState::PreConnecting(_) => {
                 let key = Ed25519KeyPair::from_seed_unchecked(&self.key.0).unwrap();
-                let auth = Ed25519PairAndPeer(key, self.peer.to_vec());
+                let auth = Ed25519PairAndPeer(key, self.peer.0.to_vec());
                 Ok(ChannelValue::StartConnection(
                     self.channel.to_string(),
                     auth,
@@ -195,8 +196,28 @@ impl Ed25519Seed {
     }
 
     pub fn public_key(&self) -> Ed25519Cert {
-        let key_pair = Ed25519KeyPair::from_seed_unchecked(&self.0).unwrap();
-        key_pair.public_key().as_ref().try_into().unwrap()
+        let key_pair = self.key_pair();
+        Ed25519Cert(key_pair.public_key().as_ref().try_into().unwrap())
+    }
+
+    pub fn key_pair(&self) -> Ed25519KeyPair {
+        Ed25519KeyPair::from_seed_unchecked(&self.0).unwrap()
+    }
+
+    pub fn x25519_agree(&self, salt: &str, peer_cert: &Ed25519Cert) -> String {
+        let x25519_user = icepipe::curve25519_conversion::ed25519_seed_to_x25519(self.0.as_slice());
+        let x25519_peer =
+            icepipe::curve25519_conversion::ed25519_public_key_to_x25519(peer_cert.0.as_slice())
+                .unwrap();
+
+        let secret = x25519_user.diffie_hellman(&x25519_peer);
+        let basekey = secret
+            .as_bytes()
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect::<String>();
+
+        icepipe::agreement::PskAuthentication::derive_text(&basekey, salt)
     }
 }
 impl Deref for Ed25519Seed {
@@ -206,7 +227,26 @@ impl Deref for Ed25519Seed {
         &self.0
     }
 }
-pub type Ed25519Cert = [u8; 32];
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ed25519Cert(pub [u8; 32]);
+impl Ed25519Cert {
+    pub fn as_author(&self) -> Author {
+        Author(
+            i32::from_le_bytes((&self.0[0..][..4]).try_into().unwrap())
+                ^ i32::from_le_bytes((&self.0[4..][..4]).try_into().unwrap())
+                ^ i32::from_le_bytes((&self.0[8..][..4]).try_into().unwrap())
+                ^ i32::from_le_bytes((&self.0[12..][..4]).try_into().unwrap()),
+        )
+    }
+
+    pub fn hex(&self) -> String {
+        self.0
+            .iter()
+            .map(|c| format!("{c:02x}"))
+            .collect::<String>()
+    }
+}
 
 pub enum ChannelState<S: DbSync> {
     Offline,

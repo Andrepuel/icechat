@@ -35,6 +35,31 @@ impl Patch {
         }
     }
 }
+impl From<Contact> for Patch {
+    fn from(value: Contact) -> Patch {
+        Patch::Contact(value)
+    }
+}
+impl From<Conversation> for Patch {
+    fn from(value: Conversation) -> Patch {
+        Patch::Conversation(value)
+    }
+}
+impl From<Member> for Patch {
+    fn from(value: Member) -> Patch {
+        Patch::Member(value)
+    }
+}
+impl From<NewMessage> for Patch {
+    fn from(value: NewMessage) -> Patch {
+        Patch::NewMessage(value)
+    }
+}
+impl From<MessageStatus> for Patch {
+    fn from(value: MessageStatus) -> Patch {
+        Patch::MessageStatus(value)
+    }
+}
 
 pub const KEY_LENGTH: usize = 32;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

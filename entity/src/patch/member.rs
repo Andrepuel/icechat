@@ -13,14 +13,17 @@ pub struct Member {
     pub conversation: Uuid,
     pub crdt: CrdtAddOnly,
 }
-impl From<(key::Model, member::Model, conversation::Model)> for Member {
-    fn from((key, member, conversation): (key::Model, member::Model, conversation::Model)) -> Self {
-        let conversation = conversation.get_uuid();
-
+impl From<(key::Model, member::Model, Uuid)> for Member {
+    fn from((key, member, conversation): (key::Model, member::Model, Uuid)) -> Self {
         Member {
             key: Key::new(key.public).expect("Inconsistent database"),
-            conversation: conversation.into(),
+            conversation,
             crdt: CrdtAddOnly(Author(member.crdt_author)),
         }
+    }
+}
+impl From<(key::Model, member::Model, conversation::Model)> for Member {
+    fn from((key, member, conversation): (key::Model, member::Model, conversation::Model)) -> Self {
+        (key, member, Uuid::from(conversation.get_uuid())).into()
     }
 }

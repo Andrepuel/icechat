@@ -15,20 +15,15 @@ pub struct NewMessage {
     pub text: String,
     pub crdt: CrdtWritableSequence,
 }
-impl From<(message::Model, key::Model, conversation::Model)> for NewMessage {
-    fn from(
-        (message, fromm, conversation): (message::Model, key::Model, conversation::Model),
-    ) -> Self {
+impl From<(message::Model, key::Model, Uuid)> for NewMessage {
+    fn from((message, from, conversation): (message::Model, key::Model, Uuid)) -> Self {
         let id = message.get_uuid();
-
-        let from = Key::new(fromm.public).expect("Inconsistent database");
-
-        let conversation = conversation.get_uuid();
+        let from = Key::new(from.public).expect("Inconsistent database");
 
         NewMessage {
             id: id.into(),
             from,
-            conversation: conversation.into(),
+            conversation,
             text: message.text,
             crdt: CrdtWritableSequence {
                 writable: CrdtWritable {
@@ -40,6 +35,15 @@ impl From<(message::Model, key::Model, conversation::Model)> for NewMessage {
         }
     }
 }
+impl From<(message::Model, key::Model, conversation::Model)> for NewMessage {
+    fn from(
+        (message, from, conversation): (message::Model, key::Model, conversation::Model),
+    ) -> Self {
+        let conversation = Uuid::from(conversation.get_uuid());
+
+        (message, from, conversation).into()
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MessageStatus {
@@ -48,19 +52,25 @@ pub struct MessageStatus {
     pub status: i32,
     pub crdt: CrdtWritable,
 }
-impl From<(message::Model, conversation::Model)> for MessageStatus {
-    fn from((message, conversation): (message::Model, conversation::Model)) -> Self {
+impl From<(message::Model, Uuid)> for MessageStatus {
+    fn from((message, conversation): (message::Model, Uuid)) -> Self {
         let id = message.get_uuid();
-        let conversation = conversation.get_uuid();
 
         MessageStatus {
             id: id.into(),
-            conversation: conversation.into(),
+            conversation,
             status: message.status,
             crdt: CrdtWritable {
                 author: Author(message.status_crdt_author),
                 generation: message.status_crdt_generation,
             },
         }
+    }
+}
+impl From<(message::Model, conversation::Model)> for MessageStatus {
+    fn from((message, conversation): (message::Model, conversation::Model)) -> Self {
+        let conversation = Uuid::from(conversation.get_uuid());
+
+        (message, conversation).into()
     }
 }
