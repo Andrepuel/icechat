@@ -3,9 +3,92 @@ pub mod sqlite_sync;
 pub mod sync;
 
 use self::error::DatabaseResult;
+use crate::channel::{Ed25519Cert, Ed25519Seed};
+use entity::{entity::local, patch};
 use futures_util::future::LocalBoxFuture;
+use migration::MigratorTrait;
 use ring::signature::{Ed25519KeyPair, KeyPair};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue, DatabaseConnection, EntityTrait, PaginatorTrait,
+    SqlxSqliteConnector, TransactionTrait,
+};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use uuid::Uuid;
+
+pub struct Database {
+    connection: DatabaseConnection,
+    seed: Ed25519Seed,
+    public: Ed25519Cert,
+    user: i32,
+}
+impl Database {
+    pub async fn connect(path: &str) -> DatabaseResult<Self> {
+        let connection = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .max_lifetime(None)
+            .idle_timeout(None)
+            .connect_with(format!("sqlite://{path}?mode=rwc").parse::<SqliteConnectOptions>()?)
+            .await?;
+
+        let connection = SqlxSqliteConnector::from_sqlx_sqlite_pool(connection);
+        migration::Migrator::up(&connection, None).await?;
+        Self::first_time(&connection).await?;
+
+        let (seed, user) = Self::fetch_user(&connection).await?;
+        let public = seed.public_key();
+
+        Ok(Database {
+            connection,
+            seed,
+            public,
+            user,
+        })
+    }
+
+    async fn first_time(conn: &DatabaseConnection) -> DatabaseResult<()> {
+        let trans = conn.begin().await?;
+
+        let existent = local::Entity::find().count(&trans).await?;
+        if existent > 0 {
+            return Ok(());
+        }
+
+        let pvt_key = Ed25519Seed::generate();
+        let pub_key = pvt_key.public_key();
+
+        let (pub_key, _) =
+            patch::Contact::get_or_create(patch::Key::new_exact(&pub_key), &trans).await;
+
+        local::ActiveModel {
+            key: ActiveValue::Set(pub_key.id),
+            private: ActiveValue::Set(pvt_key.to_vec()),
+        }
+        .insert(&trans)
+        .await?;
+
+        trans.commit().await?;
+
+        Ok(())
+    }
+
+    async fn fetch_user(conn: &DatabaseConnection) -> DatabaseResult<(Ed25519Seed, i32)> {
+        let trans = conn.begin().await?;
+        let local = local::Entity::find().one(&trans).await?.unwrap();
+
+        Ok((
+            Ed25519Seed::new(local.private.try_into().expect("Corrupted database")),
+            local.key,
+        ))
+    }
+
+    pub async fn _wip_allow_unused(&self) {
+        let _ = &self.connection;
+        let _ = &self.seed;
+        let _ = &self.public;
+        let _ = &self.user;
+    }
+}
 
 pub struct SharedDatabase {}
 impl SharedDatabase {

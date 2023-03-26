@@ -1864,6 +1864,7 @@ dependencies = [
  "futures-util",
  "icepipe",
  "log",
+ "migration",
  "notify-rust",
  "rfd",
  "ring",

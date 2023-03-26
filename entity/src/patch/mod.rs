@@ -78,6 +78,10 @@ impl Key {
         Ok(Key(key))
     }
 
+    pub fn new_exact(key: &[u8; KEY_LENGTH]) -> Self {
+        Key::new(key.to_vec()).expect("Array is already correct size")
+    }
+
     pub const fn zero() -> Key {
         Key(Vec::new())
     }
