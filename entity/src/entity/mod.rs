@@ -2,6 +2,7 @@
 
 pub mod prelude;
 
+pub mod attachment;
 pub mod channel;
 pub mod contact;
 pub mod conversation;

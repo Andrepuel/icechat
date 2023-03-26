@@ -15,6 +15,7 @@ pub struct Model {
     pub from: i32,
     pub conversation: i32,
     pub text: String,
+    pub attachment: Option<i32>,
     pub crdt_generation: i32,
     pub crdt_author: i32,
     pub status_crdt_generation: i32,
@@ -24,6 +25,14 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::attachment::Entity",
+        from = "Column::Attachment",
+        to = "super::attachment::Column::Id",
+        on_update = "NoAction",
+        on_delete = "NoAction"
+    )]
+    Attachment,
     #[sea_orm(
         belongs_to = "super::contact::Entity",
         from = "Column::From",
@@ -48,6 +57,12 @@ pub enum Relation {
         on_delete = "Restrict"
     )]
     Key,
+}
+
+impl Related<super::attachment::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Attachment.def()
+    }
 }
 
 impl Related<super::contact::Entity> for Entity {

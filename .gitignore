@@ -1,4 +1,3 @@
 /target
-/*.icechat
+/*.sqlite3
 /.env
-/dev.sqlite3
