@@ -1,5 +1,5 @@
 use crate::{
-    database::DbSync,
+    database::{ChannelData, DbSync},
     fragmentable::Fragmentable,
     pipe_sync::{PipeSync, PipeSyncResult, PipeSyncValue},
 };
@@ -14,17 +14,15 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use std::ops::Deref;
 
 pub struct Channel<S: DbSync> {
-    channel: String,
+    channel: ChannelData,
     key: Ed25519Seed,
-    peer: Ed25519Cert,
     state: ChannelState<S>,
 }
 impl<S: DbSync> Channel<S> {
-    pub fn new(channel: String, key: Ed25519Seed, peer: Ed25519Cert) -> Self {
+    pub fn new(channel: ChannelData, key: Ed25519Seed) -> Self {
         Self {
             channel,
             key,
-            peer,
             state: Default::default(),
         }
     }
@@ -33,7 +31,7 @@ impl<S: DbSync> Channel<S> {
         self.state = ChannelState::PreConnecting(state);
     }
 
-    pub fn channel(&self) -> &str {
+    pub fn channel(&self) -> &ChannelData {
         &self.channel
     }
 
@@ -94,10 +92,10 @@ impl<S: DbSync> Channel<S> {
                 unreachable!()
             }
             ChannelState::PreConnecting(_) => {
-                let key = Ed25519KeyPair::from_seed_unchecked(&self.key.0).unwrap();
-                let auth = Ed25519PairAndPeer(key, self.peer.0.to_vec());
+                let key = self.key.key_pair();
+                let auth = Ed25519PairAndPeer(key, self.channel.peer_cert.0.to_vec());
                 Ok(ChannelValue::StartConnection(
-                    self.channel.to_string(),
+                    self.channel.channel.to_string(),
                     auth,
                 ))
             }
@@ -182,6 +180,7 @@ impl<S: DbSync> Channel<S> {
     }
 }
 
+#[derive(Clone)]
 pub struct Ed25519Seed([u8; 32]);
 impl Ed25519Seed {
     pub fn new(seed: [u8; 32]) -> Ed25519Seed {

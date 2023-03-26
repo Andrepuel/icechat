@@ -50,7 +50,7 @@ impl Chat {
         let instance = self
             .sync
             .iter()
-            .map(|channel| channel.channel().to_string())
+            .map(|channel| channel.channel().channel.to_string())
             .collect::<HashSet<_>>();
 
         self.sync.extend(
@@ -58,17 +58,11 @@ impl Chat {
                 .values()
                 .filter(|new_channel| !instance.contains(&new_channel.channel))
                 .cloned()
-                .map(|channel| {
-                    Channel::new(
-                        channel.channel,
-                        Ed25519Seed::new(Default::default()),
-                        channel.peer_cert,
-                    )
-                }),
+                .map(|channel| Channel::new(channel, Ed25519Seed::new(Default::default()))),
         );
 
         self.sync
-            .retain_mut(|channel| database.contains_key(channel.channel()))
+            .retain_mut(|channel| database.contains_key(&channel.channel().channel))
     }
 
     pub fn init<P: AsRef<Path>>(user: Uuid, path: P) {
@@ -137,10 +131,10 @@ impl Chat {
         self.sync_channels();
     }
 
-    pub fn channels(&self) -> impl Iterator<Item = (&str, ChannelStateLabel)> {
+    pub fn channels(&self) -> impl Iterator<Item = (String, ChannelStateLabel)> + '_ {
         self.sync
             .iter()
-            .map(|channel| (channel.channel(), channel.state()))
+            .map(|channel| (channel.channel().peer_cert.hex(), channel.state()))
     }
 
     pub async fn wait(&mut self) -> ChatValue {
