@@ -19,7 +19,7 @@ use migration::MigratorTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, DatabaseTransaction,
     EntityTrait, ModelTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
-    SqlxSqliteConnector, TransactionTrait,
+    SqlxSqliteConnector, TransactionTrait, TryIntoModel,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -222,6 +222,35 @@ impl Database {
         trans.commit().await?;
 
         Ok(conversation)
+    }
+
+    pub async fn join_conversation(&self, uuid: Uuid) -> DatabaseResult<Conversation> {
+        let trans = self.connection.begin().await?;
+
+        let existent = Self::trans_get_conversation(&trans, uuid).await?;
+        if let Some(existent) = existent {
+            return Ok(existent);
+        }
+
+        let uuid = SplitUuid::from(uuid);
+        let conversation = conversation::ActiveModel {
+            id: ActiveValue::NotSet,
+            uuid0: ActiveValue::Set(uuid.0),
+            uuid1: ActiveValue::Set(uuid.1),
+            uuid2: ActiveValue::Set(uuid.2),
+            uuid3: ActiveValue::Set(uuid.3),
+            title: ActiveValue::Set(Default::default()),
+            crdt_generation: ActiveValue::Set(Default::default()),
+            crdt_author: ActiveValue::Set(Default::default()),
+        }
+        .save(&trans)
+        .await?;
+        let conversation = conversation.try_into_model().unwrap();
+
+        let r = Conversation::with_members(&trans, conversation).await?;
+
+        trans.commit().await?;
+        Ok(r)
     }
 
     pub async fn new_messages(&self) -> DatabaseResult<Vec<Message>> {
