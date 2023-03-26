@@ -23,7 +23,7 @@ impl<V: CrdtInstance<Crdt = CrdtWritable> + 'static, S: CrdtTransaction<V>>
 pub trait CrdtWritableTransaction<V: CrdtInstance<Crdt = CrdtWritable> + 'static>:
     CrdtTransaction<V>
 {
-    fn add(&mut self, author: Author, mut value: V) -> LocalBoxFuture<'_, V> {
+    fn set(&mut self, author: Author, mut value: V) -> LocalBoxFuture<'_, V> {
         async move {
             let existent = self.existent(value.id()).await;
             let existent_crdt = existent
@@ -110,7 +110,7 @@ pub mod tests {
             let mut list = CrdtValueTransactionMock::default();
 
             let new_value = CrdtValueMock(0, 0, 0);
-            let inserted = list.add(Author(5), new_value).await;
+            let inserted = list.set(Author(5), new_value).await;
 
             assert_eq!(inserted, CrdtValueMock(0, 1, 5));
             assert_eq!(list.0, [CrdtValueMock(0, 1, 5)]);
@@ -121,7 +121,7 @@ pub mod tests {
             let mut list = CrdtValueTransactionMock(vec![CrdtValueMock(0, 2, 3)]);
 
             let new_value = CrdtValueMock(0, 0, 0);
-            let inserted = list.add(Author(5), new_value).await;
+            let inserted = list.set(Author(5), new_value).await;
 
             assert_eq!(inserted, CrdtValueMock(0, 3, 5));
             assert_eq!(list.0, [CrdtValueMock(0, 3, 5)]);

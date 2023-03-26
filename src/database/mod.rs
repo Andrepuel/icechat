@@ -207,7 +207,7 @@ impl Database {
             crdt: Default::default(),
         };
 
-        trans.add(self.author(), conversation).await;
+        trans.set(self.author(), conversation).await;
         let conversation = Self::trans_get_conversation(&trans, id).await?.unwrap();
 
         member::ActiveModel {
@@ -479,7 +479,7 @@ impl Database {
     where
         DatabaseTransaction: CrdtWritableTransaction<P>,
     {
-        let patch = trans.add(self.author(), patch).await;
+        let patch = trans.set(self.author(), patch).await;
 
         Self::save_patch_for_sync(trans, patch).await?;
 
