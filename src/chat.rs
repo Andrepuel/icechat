@@ -1,8 +1,8 @@
 use crate::{
     channel::{Channel, ChannelStateLabel, ChannelValue, Ed25519Cert, Ed25519Seed},
     database::{
-        error::DatabaseResult, AutomergeDbSync, ChannelData, Contact, LocalDatabase, Message,
-        MessageStatus, SharedDatabase,
+        error::DatabaseResult, ChannelData, Contact, LocalDatabase, Message, MessageStatus,
+        SharedDatabase, UnimplementedSync,
     },
 };
 use futures_util::{future::select_all, FutureExt};
@@ -227,7 +227,7 @@ impl Chat {
 }
 
 pub type ChatValue = (ChannelValue, usize);
-type ChatChannel = Channel<AutomergeDbSync>;
+type ChatChannel = Channel<UnimplementedSync>;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ChatSerialized {
