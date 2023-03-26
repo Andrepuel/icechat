@@ -2,10 +2,9 @@ use std::{
     future::Future,
     time::{Duration, Instant},
 };
-use tokio::runtime::Runtime;
+use tokio::runtime::Handle;
 
 pub struct PollRuntime {
-    runtime: Runtime,
     last_run: Instant,
 }
 impl Default for PollRuntime {
@@ -15,16 +14,12 @@ impl Default for PollRuntime {
 }
 impl PollRuntime {
     pub fn new() -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         let last_run = Instant::now();
 
-        Self { runtime, last_run }
+        Self { last_run }
     }
 
-    pub fn poll<F: Future>(&mut self, future: F) {
+    pub fn poll<F: Future>(&mut self, runtime: Handle, future: F) -> Option<F::Output> {
         let now = Instant::now();
         if now
             .checked_duration_since(self.last_run)
@@ -32,7 +27,9 @@ impl PollRuntime {
             > Duration::from_millis(5)
         {
             self.last_run = now;
-            self.runtime.block_on(future);
+            Some(runtime.block_on(future))
+        } else {
+            None
         }
     }
 }

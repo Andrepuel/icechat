@@ -1,86 +1,148 @@
 use eframe::egui;
 use egui_dock::Tree;
-use futures_util::{future::select_all, FutureExt};
 use icechat::{
-    channel::{Ed25519Cert, Ed25519Seed},
-    chat::{Chat, ChatValue},
+    channel::Ed25519Cert,
+    chat::Chat,
+    database::{Contact, Conversation},
     notification::NotificationManager,
     poll_runtime::PollRuntime,
 };
 use rfd::FileDialog;
-use std::{cell::RefCell, path::Path, time::Duration};
-use uuid::Uuid;
+use std::{borrow::Cow, cell::RefCell, time::Duration};
 
 fn main() {
     env_logger::init();
 
+    let path = std::env::args().nth(1).unwrap_or_else(|| {
+        let path = FileDialog::new()
+            .add_filter("Icechat Database", &[".sqlite3"])
+            .save_file();
+
+        let Some(path) = path else { std::process::exit(0); };
+        path.to_string_lossy().into_owned()
+    });
+
+    let chat = Chat::load(path);
+
     eframe::run_native(
         "Icechat",
         Default::default(),
-        Box::new(|_| Box::<App>::default()),
+        Box::new(move |_| Box::new(App::new(chat))),
     )
 }
 
-#[derive(Default)]
 struct App {
+    chat: Chat,
     conversations: Tree<RefCell<ConversationTab>>,
     runtime: PollRuntime,
+    join: String,
+}
+impl App {
+    pub fn new(chat: Chat) -> App {
+        let user = chat.profile();
+        let mut conversations = Tree::<RefCell<ConversationTab>>::default();
+        for conversation in chat.list_conversation() {
+            conversations
+                .push_to_first_leaf(RefCell::new(ConversationTab::new(conversation, &user)));
+        }
+
+        App {
+            chat,
+            conversations,
+            runtime: Default::default(),
+            join: Default::default(),
+        }
+    }
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, frame: &mut eframe::Frame) {
         #![allow(clippy::await_holding_refcell_ref)]
         ctx.request_repaint_after(Duration::from_millis(5));
 
-        self.runtime.poll(async {
-            let mut tabs = self
-                .conversations
-                .tabs()
-                .map(|tab| tab.borrow_mut())
-                .collect::<Vec<_>>();
-
-            if tabs.is_empty() {
-                return;
-            }
-
-            let wait = select_all(tabs.iter_mut().map(|tab| tab.wait().boxed_local()));
-            let Ok((value, index, _)) = tokio::time::timeout(Duration::from_millis(1), wait).await else {
-                return;
+        let runtime = self.chat.runtime().handle().clone();
+        let changed = self.runtime.poll(runtime, async {
+            self.chat.pre_wait().await;
+            let wait = self.chat.wait();
+            let Ok(value) = tokio::time::timeout(Duration::from_millis(1), wait).await else {
+                return false;
             };
 
-            tabs[index].then(value).await;
+            self.chat.then(value).await;
+            true
         });
+
+        if changed == Some(true) {
+            for message in self.chat.new_messages() {
+                NotificationManager::show(message)
+            }
+        }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("New").clicked() {
-                        let path = FileDialog::new()
-                            .add_filter("Icechat File", &["icechat"])
-                            .save_file();
+                    if ui.button("New Conversation").clicked() {
+                        let new_conversation = self.chat.create_conversation();
 
-                        if let Some(path) = path {
-                            Chat::init(Uuid::new_v4(), &path);
-
-                            self.conversations
-                                .push_to_first_leaf(RefCell::new(ConversationTab::load(path)));
-                        }
-                    }
-
-                    if ui.button("Open").clicked() {
-                        let path = FileDialog::new()
-                            .add_filter("Icechat File", &["icechat"])
-                            .pick_file();
-
-                        if let Some(path) = path {
-                            self.conversations
-                                .push_to_first_leaf(RefCell::new(ConversationTab::load(path)));
-                        }
+                        self.conversations
+                            .push_to_first_leaf(RefCell::new(ConversationTab::new(
+                                new_conversation,
+                                &self.chat.profile(),
+                            )));
                     }
 
                     if ui.button("Quit").clicked() {
                         frame.close();
                     }
                 });
+                if ui.button("Join:").clicked() {
+                    let join = std::mem::take(&mut self.join);
+                    let join = join.split_once(':');
+                    let join = join.and_then(|(conversation, peer)| {
+                        let conversation = conversation
+                            .parse()
+                            .map_err(|e| {
+                                log::error!("Bad uuid {conversation:?}, {e}");
+                                log::debug!("{e:?}");
+                                e
+                            })
+                            .ok()?;
+
+                        let peer = (2..=peer.len())
+                            .step_by(2)
+                            .map(|idx| {
+                                u8::from_str_radix(&peer[(idx - 2)..][..2], 16).unwrap_or_default()
+                            })
+                            .collect::<Vec<u8>>();
+                        let peer = peer
+                            .as_slice()
+                            .try_into()
+                            .map_err(|e| {
+                                log::error!("Bad key {peer:?}, {e}");
+                                log::debug!("{e:?}");
+                                e
+                            })
+                            .ok()?;
+                        let peer = Ed25519Cert(peer);
+
+                        Some((conversation, peer))
+                    });
+
+                    if let Some((conversation, peer)) = join {
+                        let conversation = self.chat.join_conversation(conversation, peer);
+                        self.conversations
+                            .push_to_first_leaf(RefCell::new(ConversationTab::new(
+                                conversation,
+                                &self.chat.profile(),
+                            )));
+                    }
+                }
+                ui.text_edit_singleline(&mut self.join);
+                let key = self.chat.profile().key.hex();
+
+                if ui.button("📋").clicked() {
+                    ui.output().copied_text = key.clone();
+                }
+                ui.label(format!("Pubkey: {key}"));
             });
         });
 
@@ -88,17 +150,17 @@ impl eframe::App for App {
             let style = egui_dock::Style::from_egui(ui.style().as_ref());
             egui_dock::DockArea::new(&mut self.conversations)
                 .style(style)
-                .show_inside(ui, &mut TabViewer {});
+                .show_inside(ui, &mut TabViewer(&mut self.chat));
         });
     }
 }
 
-struct TabViewer {}
-impl egui_dock::TabViewer for TabViewer {
+struct TabViewer<'a>(&'a mut Chat);
+impl<'a> egui_dock::TabViewer for TabViewer<'a> {
     type Tab = RefCell<ConversationTab>;
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        tab.borrow_mut().ui(ui);
+        tab.borrow_mut().ui(ui, self.0);
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
@@ -107,68 +169,79 @@ impl egui_dock::TabViewer for TabViewer {
 }
 
 struct ConversationTab {
-    title: String,
-    chat: Chat,
-    name: String,
+    conversation: Conversation,
+    user: Ed25519Cert,
+    new_name: String,
+    new_title: String,
     new_channel: String,
-    new_channel_seed: Ed25519Seed,
-    new_channel_pub: Ed25519Cert,
     message: String,
 }
 impl ConversationTab {
-    fn load<P: AsRef<Path>>(path: P) -> ConversationTab {
-        let path = path.as_ref();
-        let title = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-        let chat = Chat::load(path);
-        let name = chat.profile().name;
-
-        let new_channel_seed = Ed25519Seed::generate();
-        let new_channel_pub = new_channel_seed.public_key();
+    pub fn new(conversation: Conversation, user: &Contact) -> ConversationTab {
+        let new_title = conversation.title.clone().unwrap_or_default();
 
         ConversationTab {
-            title,
-            chat,
-            name,
+            conversation,
+            user: user.key,
+            new_name: user.name.to_string(),
+            new_title,
             new_channel: Default::default(),
-            new_channel_seed,
-            new_channel_pub,
             message: Default::default(),
         }
     }
 
-    fn title(&self) -> &str {
-        &self.title
+    fn title(&self) -> Cow<str> {
+        self.conversation
+            .title
+            .as_deref()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| {
+                let other = self
+                    .conversation
+                    .members
+                    .iter()
+                    .filter(|member| member.key != self.user)
+                    .fold(None, |list, member| match list {
+                        Some(list) => Some(format!("{list}, {member}", member = member.name)),
+                        None => Some(member.name.clone()),
+                    });
+
+                other
+                    .map(Cow::Owned)
+                    .unwrap_or_else(|| Cow::Borrowed("<empty>"))
+            })
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui) {
+    fn ui(&mut self, ui: &mut egui::Ui, chat: &mut Chat) {
+        let runtime = chat.runtime().handle().clone();
+        chat.refresh_conversation(&mut self.conversation);
+
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 let text_edit = ui.text_edit_multiline(&mut self.message);
 
-                let mut send_message = |msg: &mut String| {
-                    let content = std::mem::take(msg);
-                    self.chat.send_message(content);
-                    self.chat.save();
-                };
-
                 if ui.button("Send").clicked() && !self.message.is_empty() {
-                    send_message(&mut self.message);
+                    self.send_message(chat);
                 }
                 if ui
                     .input_mut()
                     .consume_key(egui::Modifiers::default(), egui::Key::Enter)
                 {
-                    send_message(&mut self.message);
+                    self.send_message(chat);
                     text_edit.request_focus();
                 }
             });
             egui::containers::ScrollArea::vertical().show(ui, |ui| {
                 ui.vertical(|ui| {
-                    for message in self.chat.list_messages().rev() {
+                    let n = runtime
+                        .block_on(self.conversation.length(chat.database()))
+                        .unwrap();
+                    for index in (0..n).rev() {
+                        let message = runtime
+                            .block_on(self.conversation.get_message(chat.database(), index))
+                            .unwrap();
+                        let Some(message) = message else { break; };
+
                         ui.label(format!(
                             "({state:?}) {name}",
                             state = message.status,
@@ -198,38 +271,43 @@ impl ConversationTab {
             .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                     ui.heading("Channels");
-                    let mut remove = None;
-                    for (channel, state) in self.chat.channels() {
-                        ui.horizontal(|ui| {
-                            if ui.button("X").clicked() {
-                                remove = Some(channel.to_string());
-                            }
-                            ui.label(format!("({state:?}) {channel}"));
-                        });
-                    }
+                    egui::containers::ScrollArea::horizontal().show(ui, |ui| {
+                        let channels = chat
+                            .channels()
+                            .filter(|(channel, _)| channel.conversation == self.conversation.uuid);
+                        let mut remove = None;
 
-                    if let Some(remove) = remove {
-                        self.chat.remove_channel(&remove);
-                        self.chat.save();
-                    }
-
-                    ui.horizontal(|ui| {
-                        let key = self.new_channel_pub.hex();
-
-                        if ui.button("📋").clicked() {
-                            ui.output().copied_text = key.clone();
+                        for (channel, state) in channels {
+                            ui.horizontal(|ui| {
+                                if ui.button("X").clicked() {
+                                    remove = Some(channel.peer_cert);
+                                }
+                                let fp = channel.peer_cert.hex();
+                                ui.label(format!("({state:?}) {fp}"));
+                            });
                         }
-                        ui.label(format!("New Public key: {key}"))
+
+                        if let Some(remove) = remove {
+                            chat.remove_channel(self.conversation.clone(), remove);
+                        }
+
+                        ui.horizontal(|ui| {
+                            let id = self.conversation.uuid;
+                            let key = chat.profile().key.hex();
+                            let invite = format!("{id}:{key}");
+
+                            if ui.button("📋").clicked() {
+                                ui.output().copied_text = invite.clone();
+                            }
+
+                            ui.label(format!("Invite: {invite}"));
+                        });
                     });
 
                     ui.horizontal(|ui| {
                         ui.label("Peer pub key:");
                         ui.text_edit_singleline(&mut self.new_channel);
                         if ui.button("Add").clicked() {
-                            let seed = std::mem::replace(
-                                &mut self.new_channel_seed,
-                                Ed25519Seed::generate(),
-                            );
                             let peer = std::mem::take(&mut self.new_channel);
                             let mut peer = (0..peer.len())
                                 .step_by(2)
@@ -240,56 +318,46 @@ impl ConversationTab {
                             peer.resize(32, 0);
                             let peer = Ed25519Cert(peer.try_into().unwrap());
 
-                            self.new_channel_pub = self.new_channel_seed.public_key();
-                            let channel = agree_channel(&seed, &peer);
-
-                            self.chat.add_channel(channel, seed, peer);
-                            self.chat.save();
+                            chat.add_channel(self.conversation.clone(), peer);
                         }
                     });
+
+                    ui.heading("Members");
+                    for member in self.conversation.members.iter() {
+                        let name = member.name.as_str();
+                        let fp = member.key.hex();
+                        ui.label(format!("{name} ({fp})"));
+                    }
+
                     ui.heading("Profile");
                     ui.horizontal(|ui| {
                         ui.label("Name:");
-                        ui.text_edit_singleline(&mut self.name);
+                        ui.text_edit_singleline(&mut self.new_name);
                         if ui.button("Save").clicked() {
-                            let mut profile = self.chat.profile();
-                            profile.name = self.name.to_string();
-                            self.chat.set_profile(profile);
-                            self.chat.save();
+                            let mut profile = chat.profile();
+                            profile.name = self.new_name.to_string();
+                            chat.set_profile(profile);
                         }
                     });
+
+                    ui.heading("Conversation");
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.new_title);
+                        if ui.button("Save").clicked() {
+                            self.conversation.title = match self.new_title.is_empty() {
+                                true => None,
+                                false => Some(self.new_title.clone()),
+                            };
+                            chat.save_conversation(self.conversation.clone());
+                        }
+                    })
                 });
             });
     }
 
-    async fn wait(&mut self) -> ChatValue {
-        self.chat.wait().await
+    fn send_message(&mut self, chat: &mut Chat) {
+        let content = std::mem::take(&mut self.message);
+        chat.send_message(self.conversation.clone(), content);
     }
-
-    async fn then(&mut self, value: ChatValue) {
-        self.chat.then(value).await;
-
-        self.poll();
-    }
-
-    fn poll(&mut self) {
-        for message in self.chat.new_messages() {
-            NotificationManager::show(message)
-        }
-    }
-}
-
-fn agree_channel(key: &Ed25519Seed, peer: &Ed25519Cert) -> String {
-    let x25519_user = icepipe::curve25519_conversion::ed25519_seed_to_x25519(key.as_slice());
-    let x25519_peer =
-        icepipe::curve25519_conversion::ed25519_public_key_to_x25519(peer.0.as_slice()).unwrap();
-
-    let secret = x25519_user.diffie_hellman(&x25519_peer);
-    let basekey = secret
-        .as_bytes()
-        .iter()
-        .map(|x| format!("{x:02x}"))
-        .collect::<String>();
-
-    icepipe::agreement::PskAuthentication::derive_text(&basekey, "channel agreement")
 }

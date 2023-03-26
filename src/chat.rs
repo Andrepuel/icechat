@@ -1,52 +1,67 @@
 use crate::{
-    channel::{Channel, ChannelStateLabel, ChannelValue, Ed25519Cert, Ed25519Seed},
+    channel::{Channel, ChannelStateLabel, ChannelValue, Ed25519Cert},
     database::{
-        error::DatabaseResult, Contact, LocalDatabase, Message, MessageStatus, SharedDatabase,
-        UnimplementedSync,
+        sync::PatchSync, ChannelData, Contact, Conversation, Database, Message, MessageStatus,
     },
 };
 use futures_util::{future::select_all, FutureExt};
+use sea_orm::DatabaseTransaction;
 use std::{
     collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
+    path::Path,
 };
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 pub struct Chat {
-    settings: LocalDatabase,
-    database: SharedDatabase,
-    path: PathBuf,
+    runtime: Runtime,
+    database: Database,
     sync: Vec<ChatChannel>,
 }
 impl Chat {
     pub fn load<P: AsRef<Path>>(path: P) -> Chat {
-        let serialized: ChatSerialized =
-            bincode::deserialize(&std::fs::read(&path).unwrap()).unwrap();
-        let (settings, database) = serialized.load().unwrap();
-
-        let path = path.as_ref().to_owned();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let database = runtime
+            .block_on(Database::connect(&path.as_ref().to_string_lossy()))
+            .unwrap();
 
         let mut r = Chat {
-            settings,
+            runtime,
             database,
-            path,
             sync: Default::default(),
         };
 
-        r.sync_channels();
+        let runtime = r.runtime.handle().clone();
+        runtime.block_on(r.sync_channels());
 
         r
     }
 
-    fn sync_channels(&mut self) {
-        let database = self
-            .settings
-            .get()
-            .unwrap()
-            .channels
+    pub fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
+    pub fn database(&self) -> &Database {
+        &self.database
+    }
+
+    async fn sync_channels(&mut self) {
+        let mut database = Vec::new();
+
+        for conversation in self.database.list_conversation().await.unwrap() {
+            for channel in self.database.list_channels(&conversation).await.unwrap() {
+                database.push(channel);
+            }
+        }
+
+        let database = database
             .into_iter()
             .map(|channel| (channel.channel.clone(), channel))
             .collect::<HashMap<_, _>>();
+
         let instance = self
             .sync
             .iter()
@@ -58,96 +73,134 @@ impl Chat {
                 .values()
                 .filter(|new_channel| !instance.contains(&new_channel.channel))
                 .cloned()
-                .map(|channel| Channel::new(channel, Ed25519Seed::new(Default::default()))),
+                .map(|channel| Channel::new(channel, self.database.private_key().clone())),
         );
 
         self.sync
             .retain_mut(|channel| database.contains_key(&channel.channel().channel))
     }
 
-    pub fn init<P: AsRef<Path>>(user: Uuid, path: P) {
-        let mut settings = LocalDatabase::with_user(user).unwrap();
-        let mut database = SharedDatabase::with_user(user).unwrap();
-
-        Self::save_with(&mut settings, &mut database, path.as_ref());
-    }
-
-    pub fn save(&mut self) {
-        Self::save_with(&mut self.settings, &mut self.database, &self.path)
-    }
-
-    fn save_with(settings: &mut LocalDatabase, database: &mut SharedDatabase, path: &Path) {
-        let contents = bincode::serialize(&ChatSerialized::new(settings, database)).unwrap();
-        std::fs::write(path, contents).unwrap();
-    }
-
-    pub fn user(&self) -> Uuid {
-        self.settings.user()
-    }
-
     pub fn profile(&self) -> Contact {
-        self.get_peer(self.user()).unwrap()
+        self.runtime
+            .block_on(self.database.get_contact(self.database.cert()))
+            .unwrap()
+            .unwrap()
     }
 
     pub fn set_profile(&mut self, contact: Contact) {
-        self.database.add_contact(contact).unwrap()
+        self.runtime
+            .block_on(self.database.save_contact(contact))
+            .unwrap()
     }
 
-    pub fn get_peer(&self, uuid: Uuid) -> Option<Contact> {
-        self.database.get_contact(uuid).unwrap()
+    pub fn send_message(&mut self, conversation: Conversation, content: String) {
+        self.runtime
+            .block_on(self.database.send_message(conversation, content))
+            .unwrap()
     }
 
-    pub fn send_message(&mut self, content: String) -> Message {
-        let _ = content;
-        unimplemented!()
+    pub fn create_conversation(&self) -> Conversation {
+        self.runtime
+            .block_on(self.database.create_conversation(None))
+            .unwrap()
     }
 
-    pub fn list_messages(&self) -> impl DoubleEndedIterator<Item = Message> + '_ {
-        self.database.list_messages().map(Result::unwrap)
+    pub fn join_conversation(&mut self, conversation: Uuid, peer: Ed25519Cert) -> Conversation {
+        let runtime = self.runtime.handle().clone();
+        runtime.block_on(async {
+            let conversation = self.database.join_conversation(conversation).await.unwrap();
+            self.database
+                .create_channel(conversation.clone(), peer)
+                .await
+                .unwrap();
+            self.sync_channels().await;
+            conversation
+        })
+    }
+
+    pub fn refresh_conversation(&self, conversation: &mut Conversation) {
+        self.runtime.block_on(async {
+            *conversation = self
+                .database
+                .get_conversation(conversation.uuid)
+                .await
+                .unwrap()
+                .unwrap();
+        });
+    }
+
+    pub fn save_conversation(&self, conversation: Conversation) {
+        self.runtime
+            .block_on(self.database.save_conversation(conversation))
+            .unwrap()
+    }
+
+    pub fn list_conversation(&self) -> Vec<Conversation> {
+        self.runtime
+            .block_on(self.database.list_conversation())
+            .unwrap()
     }
 
     pub fn new_messages(&mut self) -> Vec<Message> {
-        unimplemented!()
+        self.runtime.block_on(async {
+            let messages = self.database.new_messages().await.unwrap();
+
+            for message in messages.iter() {
+                self.database
+                    .set_message_status(message, MessageStatus::Delivered)
+                    .await
+                    .unwrap();
+            }
+
+            messages
+        })
     }
 
-    pub fn set_message_status(&mut self, index: usize, status: MessageStatus) {
-        let _ = index;
-        let _ = status;
-        unimplemented!()
+    pub fn add_channel(&mut self, conversation: Conversation, peer: Ed25519Cert) {
+        let runtime = self.runtime.handle().clone();
+
+        runtime.block_on(async {
+            self.database
+                .create_channel(conversation, peer)
+                .await
+                .unwrap();
+            self.sync_channels().await;
+        });
     }
 
-    pub fn add_channel(&mut self, channel: String, key: Ed25519Seed, peer: Ed25519Cert) {
-        let _ = channel;
-        let _ = key;
-        let _ = peer;
-        unimplemented!()
+    pub fn remove_channel(&mut self, conversation: Conversation, peer: Ed25519Cert) {
+        let runtime = self.runtime.handle().clone();
+
+        runtime.block_on(async {
+            self.database
+                .remove_channel(conversation, peer)
+                .await
+                .unwrap();
+            self.sync_channels().await;
+        });
     }
 
-    pub fn remove_channel(&mut self, channel: &str) {
-        let mut data = self.settings.get().unwrap();
-        data.channels
-            .retain(|existent_channel| existent_channel.channel != channel);
-        self.settings.set(data).unwrap();
-        self.sync_channels();
-    }
-
-    pub fn channels(&self) -> impl Iterator<Item = (String, ChannelStateLabel)> + '_ {
+    pub fn channels(&self) -> impl Iterator<Item = (&ChannelData, ChannelStateLabel)> {
         self.sync
             .iter()
-            .map(|channel| (channel.channel().peer_cert.hex(), channel.state()))
+            .map(|channel| (channel.channel(), channel.state()))
+    }
+
+    pub async fn pre_wait(&mut self) {
+        let mut trans = self.database.begin().await.unwrap();
+        for sync in self.sync.iter_mut() {
+            if sync.state() == ChannelStateLabel::Offline {
+                sync.connect(self.database.start_sync(sync.channel().clone()));
+            }
+            sync.pre_wait(&mut trans).await;
+        }
+        trans.commit().await.unwrap();
     }
 
     pub async fn wait(&mut self) -> ChatValue {
         if self.sync.is_empty() {
             std::future::pending::<()>().await;
             unreachable!()
-        }
-
-        for sync in self.sync.iter_mut() {
-            if sync.state() == ChannelStateLabel::Offline {
-                sync.connect(self.database.start_sync());
-            }
-            sync.pre_wait(&mut self.database).await;
         }
 
         let (value, index, _) =
@@ -158,7 +211,6 @@ impl Chat {
 
     pub async fn then(&mut self, (value, index): ChatValue) {
         self.sync[index].then(value).await;
-        self.save();
     }
 
     pub fn connected(&self) -> bool {
@@ -175,25 +227,4 @@ impl Chat {
 }
 
 pub type ChatValue = (ChannelValue, usize);
-type ChatChannel = Channel<UnimplementedSync>;
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ChatSerialized {
-    settings: Vec<u8>,
-    database: Vec<u8>,
-}
-impl ChatSerialized {
-    fn new(settings: &mut LocalDatabase, database: &mut SharedDatabase) -> Self {
-        let settings = settings.save();
-        let database = database.save();
-
-        Self { settings, database }
-    }
-
-    fn load(&self) -> DatabaseResult<(LocalDatabase, SharedDatabase)> {
-        let settings = LocalDatabase::load(&self.settings)?;
-        let database = SharedDatabase::load_with_user(&self.database, settings.user())?;
-
-        Ok((settings, database))
-    }
-}
+type ChatChannel = Channel<PatchSync<DatabaseTransaction>>;
