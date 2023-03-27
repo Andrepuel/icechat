@@ -8,7 +8,7 @@ use entity::{
     crdt::{
         sequence::{CrdtWritableSequence, CrdtWritableSequenceTransaction},
         writable::{CrdtWritable, CrdtWritableTransaction},
-        Author, CrdtAddOnly, CrdtInstance, CrdtTransaction,
+        Author, CrdtAddOnly, CrdtInstance, CrdtOrd, CrdtTransaction,
     },
     entity::{attachment, channel, contact, conversation, initial_sync, local, member, message},
     patch::{self, attachment::AttachmentMetaModel, Patch},
@@ -299,6 +299,50 @@ impl Database {
         Ok(())
     }
 
+    pub async fn send_file(
+        &self,
+        conversation: Conversation,
+        filename: String,
+        payload: Vec<u8>,
+    ) -> DatabaseResult<()> {
+        let mut trans = self.connection.begin().await?;
+
+        let attachment_id = Uuid::new_v4();
+        self.add_only_new_patch(
+            &mut trans,
+            patch::Attachment {
+                id: attachment_id,
+                conversation: conversation.uuid,
+                payload: Some(payload),
+                crdt: Default::default(),
+            },
+        )
+        .await?;
+
+        let id = Uuid::new_v4();
+        self.push_new_patch(
+            &mut trans,
+            patch::NewMessage {
+                id,
+                from: self.patch_key(),
+                conversation: conversation.uuid,
+                text: filename,
+                attachment: Some(attachment_id),
+                crdt: Default::default(),
+            },
+        )
+        .await?;
+
+        trans.commit().await?;
+        Ok(())
+    }
+
+    pub async fn fetch_file_payload(&self, id: i32) -> DatabaseResult<Option<Vec<u8>>> {
+        let attachment = attachment::Entity::find_by_id(id).one(&self.connection).await?;
+
+        Ok(attachment.and_then(|attachment| attachment.payload))
+    }
+
     pub async fn set_message_status(
         &self,
         message: &Message,
@@ -375,7 +419,7 @@ impl Database {
             return Ok(());
         }
 
-        Self::merge_new_patch(
+        self.add_only_new_patch(
             &mut trans,
             patch::Member {
                 key: peer_key,
@@ -559,13 +603,15 @@ impl Database {
         Ok(())
     }
 
-    async fn merge_new_patch<P: CrdtInstance + Into<Patch> + 'static>(
+    async fn add_only_new_patch<P: CrdtInstance + Into<Patch> + 'static>(
+        &self,
         trans: &mut DatabaseTransaction,
-        patch: P,
+        mut patch: P,
     ) -> DatabaseResult<bool>
     where
         DatabaseTransaction: CrdtTransaction<P>,
     {
+        patch.set_crdt(patch.crdt().next(self.author()));
         let patch = trans.merge(patch).await;
         let Some(patch) = patch else { return Ok(false); };
 
