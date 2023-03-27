@@ -99,6 +99,18 @@ impl Chat {
             .unwrap()
     }
 
+    pub fn send_file(&mut self, conversation: Conversation, filename: String, payload: Vec<u8>) {
+        self.runtime
+            .block_on(self.database.send_file(conversation, filename, payload))
+            .unwrap()
+    }
+
+    pub fn fetch_file_payload(&self, id: i32) -> Option<Vec<u8>> {
+        self.runtime
+            .block_on(self.database.fetch_file_payload(id))
+            .unwrap()
+    }
+
     pub fn create_conversation(&self) -> Conversation {
         self.runtime
             .block_on(self.database.create_conversation(None))

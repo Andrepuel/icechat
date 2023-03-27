@@ -338,7 +338,9 @@ impl Database {
     }
 
     pub async fn fetch_file_payload(&self, id: i32) -> DatabaseResult<Option<Vec<u8>>> {
-        let attachment = attachment::Entity::find_by_id(id).one(&self.connection).await?;
+        let attachment = attachment::Entity::find_by_id(id)
+            .one(&self.connection)
+            .await?;
 
         Ok(attachment.and_then(|attachment| attachment.payload))
     }
@@ -814,7 +816,7 @@ pub struct Message {
     pub uuid: Uuid,
     pub from: Contact,
     pub conversation: Uuid,
-    pub content: String,
+    pub content: Content,
     pub status: MessageStatus,
 }
 impl Message {
@@ -829,15 +831,45 @@ impl Message {
             .await?
             .unwrap();
         let key = key.unwrap();
+        let attachment = match message.attachment {
+            Some(id) => Some(
+                AttachmentMetaModel::find_by_id(id)
+                    .one(trans)
+                    .await?
+                    .unwrap(),
+            ),
+            None => None,
+        };
 
         Ok(Message {
             id: message.id,
             uuid: message.get_uuid().into(),
             from: (key, contact).into(),
             conversation,
-            content: message.text,
+            content: match attachment {
+                Some(attachment) => Content::Attachment(message.text, attachment.id),
+                None => Content::Text(message.text),
+            },
             status: message.status.into(),
         })
+    }
+
+    pub fn text(&self) -> &str {
+        match &self.content {
+            Content::Text(text) => text,
+            Content::Attachment(text, _) => text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Content {
+    Text(String),
+    Attachment(String, i32),
+}
+impl Default for Content {
+    fn default() -> Self {
+        Content::Text(Default::default())
     }
 }
 

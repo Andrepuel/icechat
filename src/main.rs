@@ -3,7 +3,7 @@ use egui_dock::Tree;
 use icechat::{
     channel::Ed25519Cert,
     chat::Chat,
-    database::{Contact, Conversation},
+    database::{Contact, Content, Conversation},
     notification::NotificationManager,
     poll_runtime::PollRuntime,
 };
@@ -223,6 +223,11 @@ impl ConversationTab {
                 if ui.button("Send").clicked() && !self.message.is_empty() {
                     self.send_message(chat);
                 }
+
+                if ui.button("Send file").clicked() {
+                    self.send_file(chat);
+                }
+
                 if ui
                     .input_mut()
                     .consume_key(egui::Modifiers::default(), egui::Key::Enter)
@@ -247,18 +252,28 @@ impl ConversationTab {
                             state = message.status,
                             name = message.from.name
                         ));
-                        ui.horizontal(|ui| {
-                            if ui.button("⬅").clicked() {
-                                self.message = format!(
-                                    "{sender} said:\n{message}\n\n",
-                                    sender = message.from.name,
-                                    message = message.content
-                                );
+                        ui.horizontal(|ui| match message.content {
+                            Content::Text(text) => {
+                                if ui.button("⬅").clicked() {
+                                    self.message = format!(
+                                        "{sender} said:\n{message}\n\n",
+                                        sender = message.from.name,
+                                        message = text,
+                                    );
+                                }
+                                if ui.button("📋").clicked() {
+                                    ui.output().copied_text = text.to_string();
+                                }
+
+                                ui.label(text);
                             }
-                            if ui.button("📋").clicked() {
-                                ui.output().copied_text = message.content.clone();
+                            Content::Attachment(name, id) => {
+                                if ui.button("💾").clicked() {
+                                    Self::save_file(chat, &name, id);
+                                }
+
+                                ui.label(name);
                             }
-                            ui.label(message.content);
                         });
                         ui.separator();
                     }
@@ -359,5 +374,29 @@ impl ConversationTab {
     fn send_message(&mut self, chat: &mut Chat) {
         let content = std::mem::take(&mut self.message);
         chat.send_message(self.conversation.clone(), content);
+    }
+
+    fn send_file(&mut self, chat: &mut Chat) {
+        let path = FileDialog::new().set_title("Send file").pick_file();
+
+        let Some(path) = path else { return; };
+
+        let name = path
+            .file_name()
+            .map(|x| x.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "unnamed file".to_string());
+        let blob = std::fs::read(path).unwrap();
+
+        chat.send_file(self.conversation.clone(), name, blob);
+    }
+
+    fn save_file(chat: &Chat, name: &str, id: i32) {
+        let blob = chat.fetch_file_payload(id);
+        let path = FileDialog::new().set_file_name(name).save_file();
+
+        let Some(blob) = blob else { return; };
+        let Some(path) = path else { return; };
+
+        std::fs::write(path, blob).unwrap();
     }
 }

@@ -6,7 +6,8 @@ use super::{
 use crate::{
     entity::{conversation, key, message},
     patch::{
-        attachment::AttachmentMetaModel, Contact, Conversation, Key, MessageStatus, NewMessage,
+        attachment::AttachmentMetaModel, Attachment, Contact, Conversation, Key, MessageStatus,
+        NewMessage,
     },
     uuid::SplitUuid,
 };
@@ -45,6 +46,10 @@ impl CrdtTransaction<NewMessage> for DatabaseTransaction {
         async move {
             let (from, _) = Contact::get_or_create(message.from.clone(), self).await;
             let conversation = Conversation::get_or_create(message.conversation, self).await;
+            let attachment = match message.attachment {
+                Some(uuid) => Some(Attachment::get_or_create(uuid, self).await.id),
+                None => None,
+            };
 
             let mut active = message::ActiveModel {
                 id: ActiveValue::NotSet,
@@ -56,7 +61,7 @@ impl CrdtTransaction<NewMessage> for DatabaseTransaction {
                 from: ActiveValue::Set(from.id),
                 conversation: ActiveValue::Set(conversation.id),
                 text: ActiveValue::Set(message.text.clone()),
-                attachment: ActiveValue::Set(None),
+                attachment: ActiveValue::Set(attachment),
                 crdt_generation: ActiveValue::Set(message.crdt.writable.generation),
                 crdt_author: ActiveValue::Set(message.crdt.writable.author.0),
                 crdt_sequence: ActiveValue::Set(message.crdt.sequence),
