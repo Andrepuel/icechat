@@ -1,9 +1,11 @@
+pub mod attachment;
 pub mod contact;
 pub mod conversation;
 pub mod member;
 pub mod message;
 
 pub use self::{
+    attachment::Attachment,
     contact::Contact,
     conversation::Conversation,
     member::Member,
@@ -23,6 +25,7 @@ pub enum Patch {
     Member(Member),
     NewMessage(NewMessage),
     MessageStatus(MessageStatus),
+    Attachment(Attachment),
 }
 impl Patch {
     pub async fn merge(self, trans: &mut DatabaseTransaction) -> Option<Self> {
@@ -32,6 +35,7 @@ impl Patch {
             Patch::Member(crdt) => trans.merge(crdt).await.map(Patch::Member),
             Patch::NewMessage(crdt) => trans.merge(crdt).await.map(Patch::NewMessage),
             Patch::MessageStatus(crdt) => trans.merge(crdt).await.map(Patch::MessageStatus),
+            Patch::Attachment(crdt) => trans.merge(crdt).await.map(Patch::Attachment),
         }
     }
 }
@@ -58,6 +62,11 @@ impl From<NewMessage> for Patch {
 impl From<MessageStatus> for Patch {
     fn from(value: MessageStatus) -> Patch {
         Patch::MessageStatus(value)
+    }
+}
+impl From<Attachment> for Patch {
+    fn from(value: Attachment) -> Self {
+        Patch::Attachment(value)
     }
 }
 

@@ -5,7 +5,9 @@ use super::{
 };
 use crate::{
     entity::{conversation, key, message},
-    patch::{Contact, Conversation, Key, MessageStatus, NewMessage},
+    patch::{
+        attachment::AttachmentMetaModel, Contact, Conversation, Key, MessageStatus, NewMessage,
+    },
     uuid::SplitUuid,
 };
 use futures::{future::LocalBoxFuture, FutureExt};
@@ -113,9 +115,23 @@ impl CrdtTransaction<NewMessage> for DatabaseTransaction {
                 .unwrap()
                 .unwrap();
 
+            let attachment = match message.attachment {
+                Some(id) => Some(
+                    AttachmentMetaModel::find_by_id(id)
+                        .one(self)
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                ),
+                None => None,
+            };
+
             let id = message.id;
 
-            Some((id, NewMessage::from((message, from, conversation))))
+            Some((
+                id,
+                NewMessage::from((message, from, conversation, attachment)),
+            ))
         }
         .boxed_local()
     }

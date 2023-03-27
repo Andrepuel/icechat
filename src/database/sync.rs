@@ -43,6 +43,7 @@ impl SyncData {
             Patch::Member(member) => Some(member.conversation),
             Patch::NewMessage(message) => Some(message.conversation),
             Patch::MessageStatus(status) => Some(status.conversation),
+            Patch::Attachment(attachment) => Some(attachment.conversation),
         }
     }
 
@@ -53,6 +54,7 @@ impl SyncData {
             Patch::Member(member) => member.crdt.0,
             Patch::NewMessage(message) => message.crdt.writable.author,
             Patch::MessageStatus(message) => message.crdt.author,
+            Patch::Attachment(attachment) => attachment.crdt.0,
         }
     }
 }
@@ -184,8 +186,8 @@ impl From<SyncData> for PatchSyncMessage {
 pub mod tests {
     use super::*;
     use entity::{
-        crdt::{sequence::CrdtWritableSequence, writable::CrdtWritable},
-        patch::{Contact, Conversation, Key, Member, MessageStatus, NewMessage},
+        crdt::{sequence::CrdtWritableSequence, writable::CrdtWritable, CrdtAddOnly},
+        patch::{Attachment, Contact, Conversation, Key, Member, MessageStatus, NewMessage},
     };
     use rstest::*;
     use std::collections::HashSet;
@@ -281,6 +283,7 @@ pub mod tests {
     #[case(a_member_patch(), Some(SAME_CONVERSATION))]
     #[case(a_message_patch(), Some(SAME_CONVERSATION))]
     #[case(a_message_status_patch(), Some(SAME_CONVERSATION))]
+    #[case(an_attachment_patch(), Some(SAME_CONVERSATION))]
     fn given_a_sync_data_the_conversation_is_inferred_from_the_patch(
         #[case] patch: Patch,
         #[case] conversation: Option<Uuid>,
@@ -299,6 +302,7 @@ pub mod tests {
     #[case(a_member_patch(), USER)]
     #[case(a_message_patch(), USER)]
     #[case(a_message_status_patch(), USER)]
+    #[case(an_attachment_patch(), USER)]
     fn given_a_sync_data_the_author_is_inferred_from_the_patch(
         #[case] patch: Patch,
         #[case] author: Author,
@@ -343,6 +347,7 @@ pub mod tests {
             from: Default::default(),
             conversation: SAME_CONVERSATION,
             text: Default::default(),
+            attachment: Default::default(),
             crdt: CrdtWritableSequence {
                 writable: CrdtWritable {
                     author: USER,
@@ -362,6 +367,15 @@ pub mod tests {
                 ..Default::default()
             },
         })
+    }
+    fn an_attachment_patch() -> Patch {
+        Attachment {
+            id: Default::default(),
+            conversation: SAME_CONVERSATION,
+            payload: Default::default(),
+            crdt: CrdtAddOnly(USER),
+        }
+        .into()
     }
 
     mod given_a_patch_sync {

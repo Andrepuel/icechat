@@ -10,8 +10,8 @@ use entity::{
         writable::{CrdtWritable, CrdtWritableTransaction},
         Author, CrdtAddOnly, CrdtInstance, CrdtTransaction,
     },
-    entity::{channel, contact, conversation, initial_sync, local, member, message},
-    patch::{self, Patch},
+    entity::{attachment, channel, contact, conversation, initial_sync, local, member, message},
+    patch::{self, attachment::AttachmentMetaModel, Patch},
     uuid::{SplitUuid, UuidValue},
 };
 use futures_util::future::LocalBoxFuture;
@@ -289,6 +289,7 @@ impl Database {
                 from: self.patch_key(),
                 conversation: conversation.uuid,
                 text,
+                attachment: None,
                 crdt: Default::default(),
             },
         )
@@ -476,6 +477,19 @@ impl Database {
             .await?;
         }
 
+        let patches = attachment::Entity::find()
+            .filter(attachment::Column::Conversation.eq(conversation.id))
+            .all(trans)
+            .await?;
+        for patch in patches {
+            Self::save_initial_patch(
+                trans,
+                channel_id,
+                patch::Attachment::from((conversation.uuid, patch)),
+            )
+            .await?;
+        }
+
         let messages = message::Entity::find()
             .filter(message::Column::Conversation.eq(conversation.id))
             .find_also_related(entity::entity::key::Entity)
@@ -483,10 +497,25 @@ impl Database {
             .await?;
         for model in messages {
             let (message, key) = model;
+            let attachment = match message.attachment {
+                Some(id) => Some(
+                    AttachmentMetaModel::find_by_id(id)
+                        .one(trans)
+                        .await?
+                        .unwrap(),
+                ),
+                None => None,
+            };
+
             Self::save_initial_patch(
                 trans,
                 channel_id,
-                patch::NewMessage::from((message.clone(), key.unwrap(), conversation.uuid)),
+                patch::NewMessage::from((
+                    message.clone(),
+                    key.unwrap(),
+                    conversation.uuid,
+                    attachment,
+                )),
             )
             .await?;
             Self::save_initial_patch(

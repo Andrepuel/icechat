@@ -1,4 +1,4 @@
-use super::Key;
+use super::{attachment::AttachmentMetaModel, Key};
 use crate::{
     crdt::{sequence::CrdtWritableSequence, writable::CrdtWritable, Author},
     entity::{conversation, key, message},
@@ -13,18 +13,35 @@ pub struct NewMessage {
     pub from: Key,
     pub conversation: Uuid,
     pub text: String,
+    pub attachment: Option<Uuid>,
     pub crdt: CrdtWritableSequence,
 }
-impl From<(message::Model, key::Model, Uuid)> for NewMessage {
-    fn from((message, from, conversation): (message::Model, key::Model, Uuid)) -> Self {
+impl
+    From<(
+        message::Model,
+        key::Model,
+        Uuid,
+        Option<AttachmentMetaModel>,
+    )> for NewMessage
+{
+    fn from(
+        (message, from, conversation, attachment): (
+            message::Model,
+            key::Model,
+            Uuid,
+            Option<AttachmentMetaModel>,
+        ),
+    ) -> Self {
         let id = message.get_uuid();
         let from = Key::new(from.public).expect("Inconsistent database");
+        let attachment = attachment.map(|attachment| attachment.get_uuid().into());
 
         NewMessage {
             id: id.into(),
             from,
             conversation,
             text: message.text,
+            attachment,
             crdt: CrdtWritableSequence {
                 writable: CrdtWritable {
                     author: Author(message.crdt_author),
@@ -35,13 +52,25 @@ impl From<(message::Model, key::Model, Uuid)> for NewMessage {
         }
     }
 }
-impl From<(message::Model, key::Model, conversation::Model)> for NewMessage {
+impl
+    From<(
+        message::Model,
+        key::Model,
+        conversation::Model,
+        Option<AttachmentMetaModel>,
+    )> for NewMessage
+{
     fn from(
-        (message, from, conversation): (message::Model, key::Model, conversation::Model),
+        (message, from, conversation, attachment): (
+            message::Model,
+            key::Model,
+            conversation::Model,
+            Option<AttachmentMetaModel>,
+        ),
     ) -> Self {
         let conversation = Uuid::from(conversation.get_uuid());
 
-        (message, from, conversation).into()
+        (message, from, conversation, attachment).into()
     }
 }
 

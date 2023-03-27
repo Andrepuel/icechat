@@ -1,3 +1,4 @@
+pub mod attachment;
 pub mod contact;
 pub mod conversation;
 pub mod member;

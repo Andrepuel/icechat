@@ -1,4 +1,7 @@
-use crate::entity::{conversation, message};
+use crate::{
+    entity::{attachment, conversation, message},
+    patch::attachment::AttachmentMetaModel,
+};
 use sea_orm::{sea_query::IntoCondition, ColumnTrait};
 use uuid::Uuid;
 
@@ -104,6 +107,27 @@ impl UuidColumn for message::Column {
     }
 }
 impl UuidValue for message::Model {
+    fn get_uuid(&self) -> SplitUuid {
+        SplitUuid(self.uuid0, self.uuid1, self.uuid2, self.uuid3)
+    }
+}
+
+impl UuidColumn for attachment::Column {
+    fn get_column() -> [Self; 4] {
+        [
+            attachment::Column::Uuid0,
+            attachment::Column::Uuid1,
+            attachment::Column::Uuid2,
+            attachment::Column::Uuid3,
+        ]
+    }
+}
+impl UuidValue for attachment::Model {
+    fn get_uuid(&self) -> SplitUuid {
+        SplitUuid(self.uuid0, self.uuid1, self.uuid2, self.uuid3)
+    }
+}
+impl UuidValue for AttachmentMetaModel {
     fn get_uuid(&self) -> SplitUuid {
         SplitUuid(self.uuid0, self.uuid1, self.uuid2, self.uuid3)
     }
