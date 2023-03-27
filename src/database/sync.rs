@@ -41,9 +41,10 @@ impl SyncData {
             Patch::Contact(_) => None,
             Patch::Conversation(conversation) => Some(conversation.id),
             Patch::Member(member) => Some(member.conversation),
-            Patch::NewMessage(message) => Some(message.conversation),
+            Patch::NewTextMessage(message) => Some(message.conversation),
             Patch::MessageStatus(status) => Some(status.conversation),
             Patch::Attachment(attachment) => Some(attachment.conversation),
+            Patch::NewAttachmentMessage(attachment) => Some(attachment.conversation),
         }
     }
 
@@ -52,9 +53,10 @@ impl SyncData {
             Patch::Contact(contact) => contact.crdt.author,
             Patch::Conversation(conversation) => conversation.crdt.author,
             Patch::Member(member) => member.crdt.0,
-            Patch::NewMessage(message) => message.crdt.writable.author,
+            Patch::NewTextMessage(message) => message.crdt.writable.author,
             Patch::MessageStatus(message) => message.crdt.author,
             Patch::Attachment(attachment) => attachment.crdt.0,
+            Patch::NewAttachmentMessage(attachment) => attachment.crdt.writable.author,
         }
     }
 }
@@ -187,7 +189,10 @@ pub mod tests {
     use super::*;
     use entity::{
         crdt::{sequence::CrdtWritableSequence, writable::CrdtWritable, CrdtAddOnly},
-        patch::{Attachment, Contact, Conversation, Key, Member, MessageStatus, NewMessage},
+        patch::{
+            Attachment, Contact, Conversation, Key, Member, MessageStatus, NewAttachmentMessage,
+            NewTextMessage,
+        },
     };
     use rstest::*;
     use std::collections::HashSet;
@@ -281,9 +286,10 @@ pub mod tests {
     #[case(a_contact_patch(), None)]
     #[case(a_conversation_patch(), Some(SAME_CONVERSATION))]
     #[case(a_member_patch(), Some(SAME_CONVERSATION))]
-    #[case(a_message_patch(), Some(SAME_CONVERSATION))]
+    #[case(a_text_message_patch(), Some(SAME_CONVERSATION))]
     #[case(a_message_status_patch(), Some(SAME_CONVERSATION))]
     #[case(an_attachment_patch(), Some(SAME_CONVERSATION))]
+    #[case(an_attachment_message_patch(), Some(SAME_CONVERSATION))]
     fn given_a_sync_data_the_conversation_is_inferred_from_the_patch(
         #[case] patch: Patch,
         #[case] conversation: Option<Uuid>,
@@ -300,9 +306,10 @@ pub mod tests {
     #[case(a_contact_patch(), USER)]
     #[case(a_conversation_patch(), USER)]
     #[case(a_member_patch(), USER)]
-    #[case(a_message_patch(), USER)]
+    #[case(a_text_message_patch(), USER)]
     #[case(a_message_status_patch(), USER)]
     #[case(an_attachment_patch(), USER)]
+    #[case(an_attachment_message_patch(), USER)]
     fn given_a_sync_data_the_author_is_inferred_from_the_patch(
         #[case] patch: Patch,
         #[case] author: Author,
@@ -341,13 +348,12 @@ pub mod tests {
             crdt: entity::crdt::CrdtAddOnly(USER),
         })
     }
-    fn a_message_patch() -> Patch {
-        Patch::NewMessage(NewMessage {
+    fn a_text_message_patch() -> Patch {
+        NewTextMessage {
             id: Default::default(),
             from: Default::default(),
             conversation: SAME_CONVERSATION,
             text: Default::default(),
-            attachment: Default::default(),
             crdt: CrdtWritableSequence {
                 writable: CrdtWritable {
                     author: USER,
@@ -355,7 +361,8 @@ pub mod tests {
                 },
                 ..Default::default()
             },
-        })
+        }
+        .into()
     }
     fn a_message_status_patch() -> Patch {
         Patch::MessageStatus(MessageStatus {
@@ -374,6 +381,23 @@ pub mod tests {
             conversation: SAME_CONVERSATION,
             payload: Default::default(),
             crdt: CrdtAddOnly(USER),
+        }
+        .into()
+    }
+    fn an_attachment_message_patch() -> Patch {
+        NewAttachmentMessage {
+            id: Default::default(),
+            from: Default::default(),
+            conversation: SAME_CONVERSATION,
+            filename: Default::default(),
+            attachment: Default::default(),
+            crdt: CrdtWritableSequence {
+                writable: CrdtWritable {
+                    author: USER,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
         }
         .into()
     }

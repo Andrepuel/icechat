@@ -1225,6 +1225,7 @@ dependencies = [
 name = "entity"
 version = "0.1.0"
 dependencies = [
+ "either",
  "futures",
  "sea-orm",
  "serde",

@@ -9,9 +9,10 @@ pub use self::{
     contact::Contact,
     conversation::Conversation,
     member::Member,
-    message::{MessageStatus, NewMessage},
+    message::{MessageStatus, NewAttachmentMessage, NewMessage, NewTextMessage},
 };
 use crate::{crdt::CrdtTransaction, entity::key};
+use either::Either;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter,
 };
@@ -23,9 +24,10 @@ pub enum Patch {
     Contact(Contact),
     Conversation(Conversation),
     Member(Member),
-    NewMessage(NewMessage),
+    NewTextMessage(NewTextMessage),
     MessageStatus(MessageStatus),
     Attachment(Attachment),
+    NewAttachmentMessage(NewAttachmentMessage),
 }
 impl Patch {
     pub async fn merge(self, trans: &mut DatabaseTransaction) -> Option<Self> {
@@ -33,9 +35,16 @@ impl Patch {
             Patch::Contact(crdt) => trans.merge(crdt).await.map(Patch::Contact),
             Patch::Conversation(crdt) => trans.merge(crdt).await.map(Patch::Conversation),
             Patch::Member(crdt) => trans.merge(crdt).await.map(Patch::Member),
-            Patch::NewMessage(crdt) => trans.merge(crdt).await.map(Patch::NewMessage),
+            Patch::NewTextMessage(crdt) => trans
+                .merge(crdt.into_crdt())
+                .await
+                .map(|crdt| Patch::NewTextMessage(crdt.into_text())),
             Patch::MessageStatus(crdt) => trans.merge(crdt).await.map(Patch::MessageStatus),
             Patch::Attachment(crdt) => trans.merge(crdt).await.map(Patch::Attachment),
+            Patch::NewAttachmentMessage(crdt) => trans
+                .merge(crdt.into_crdt())
+                .await
+                .map(|crdt| Patch::NewAttachmentMessage(crdt.into_attachment())),
         }
     }
 }
@@ -54,9 +63,9 @@ impl From<Member> for Patch {
         Patch::Member(value)
     }
 }
-impl From<NewMessage> for Patch {
-    fn from(value: NewMessage) -> Patch {
-        Patch::NewMessage(value)
+impl From<NewTextMessage> for Patch {
+    fn from(value: NewTextMessage) -> Self {
+        Patch::NewTextMessage(value)
     }
 }
 impl From<MessageStatus> for Patch {
@@ -67,6 +76,19 @@ impl From<MessageStatus> for Patch {
 impl From<Attachment> for Patch {
     fn from(value: Attachment) -> Self {
         Patch::Attachment(value)
+    }
+}
+impl From<NewAttachmentMessage> for Patch {
+    fn from(value: NewAttachmentMessage) -> Self {
+        Patch::NewAttachmentMessage(value)
+    }
+}
+impl From<NewMessage> for Patch {
+    fn from(value: NewMessage) -> Self {
+        match value.into_serializable() {
+            Either::Left(text) => Patch::NewTextMessage(text),
+            Either::Right(attachment) => Patch::NewAttachmentMessage(attachment),
+        }
     }
 }
 
