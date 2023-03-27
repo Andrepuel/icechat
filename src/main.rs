@@ -175,6 +175,7 @@ struct ConversationTab {
     new_title: String,
     new_channel: String,
     message: String,
+    max: usize,
 }
 impl ConversationTab {
     pub fn new(conversation: Conversation, user: &Contact) -> ConversationTab {
@@ -187,6 +188,7 @@ impl ConversationTab {
             new_title,
             new_channel: Default::default(),
             message: Default::default(),
+            max: 10,
         }
     }
 
@@ -238,14 +240,16 @@ impl ConversationTab {
             });
             egui::containers::ScrollArea::vertical().show(ui, |ui| {
                 ui.vertical(|ui| {
-                    let n = runtime
+                    let length = runtime
                         .block_on(self.conversation.length(chat.database()))
                         .unwrap();
-                    for index in (0..n).rev() {
+                    let mut n = 0;
+                    for index in (0..length).rev() {
                         let message = runtime
                             .block_on(self.conversation.get_message(chat.database(), index))
                             .unwrap();
                         let Some(message) = message else { break; };
+                        n += 1;
 
                         ui.label(format!(
                             "({state:?}) {name}",
@@ -276,6 +280,10 @@ impl ConversationTab {
                             }
                         });
                         ui.separator();
+                    }
+
+                    if n == self.max && ui.button("Load more").clicked() {
+                        self.max += 10;
                     }
                 });
             });
