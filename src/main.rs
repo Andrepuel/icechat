@@ -244,7 +244,7 @@ impl ConversationTab {
                         .block_on(self.conversation.length(chat.database()))
                         .unwrap();
                     let mut n = 0;
-                    for index in (0..length).rev() {
+                    for index in (0..length).rev().take(self.max) {
                         let message = runtime
                             .block_on(self.conversation.get_message(chat.database(), index))
                             .unwrap();
