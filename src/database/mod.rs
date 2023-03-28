@@ -335,7 +335,7 @@ impl Database {
                 from: self.patch_key(),
                 conversation: conversation.uuid,
                 text: filename,
-                attachment: None,
+                attachment: Some(attachment_id),
                 crdt: Default::default(),
             },
         )
