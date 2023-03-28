@@ -253,12 +253,20 @@ impl Database {
         Ok(r)
     }
 
-    pub async fn new_messages(&self) -> DatabaseResult<Vec<Message>> {
+    pub async fn new_messages(
+        &self,
+        conversation: Option<&Conversation>,
+    ) -> DatabaseResult<Vec<Message>> {
         let trans = self.connection.begin().await?;
 
         let models = message::Entity::find()
             .filter(message::Column::From.ne(self.user))
-            .filter(message::Column::Status.eq(0))
+            .filter(message::Column::Status.eq(0));
+        let models = match conversation {
+            Some(conversation) => models.filter(message::Column::Conversation.eq(conversation.id)),
+            None => models,
+        };
+        let models = models
             .find_also_related(conversation::Entity)
             .all(&trans)
             .await?;

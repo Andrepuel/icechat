@@ -1,11 +1,9 @@
-use crate::{
-    channel::{Channel, ChannelStateLabel, ChannelValue, Ed25519Cert},
-    database::{
-        sync::PatchSync, ChannelData, Contact, Conversation, Database, Message, MessageStatus,
-    },
-};
 use futures_util::{future::select_all, FutureExt};
-use sea_orm::DatabaseTransaction;
+use icechat::{
+    channel::{Channel, ChannelStateLabel, ChannelValue, Ed25519Cert},
+    database::{ChannelData, Contact, Conversation, Database, Message, MessageStatus},
+    SqliteChannel,
+};
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
@@ -16,7 +14,7 @@ use uuid::Uuid;
 pub struct Chat {
     runtime: Runtime,
     database: Database,
-    sync: Vec<ChatChannel>,
+    sync: Vec<SqliteChannel>,
 }
 impl Chat {
     pub fn load<P: AsRef<Path>>(path: P) -> Chat {
@@ -155,7 +153,7 @@ impl Chat {
 
     pub fn new_messages(&mut self) -> Vec<Message> {
         self.runtime.block_on(async {
-            let messages = self.database.new_messages().await.unwrap();
+            let messages = self.database.new_messages(None).await.unwrap();
 
             for message in messages.iter() {
                 self.database
@@ -239,4 +237,3 @@ impl Chat {
 }
 
 pub type ChatValue = (ChannelValue, usize);
-type ChatChannel = Channel<PatchSync<DatabaseTransaction>>;

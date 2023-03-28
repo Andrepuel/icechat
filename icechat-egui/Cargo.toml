@@ -1,0 +1,15 @@
+[package]
+name = "icechat-egui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = { version = "0.20.1", default-features = false, features = ["wgpu", "default_fonts"] }
+egui_dock = "0.3.1"
+env_logger = "0.10.0"
+futures-util = "0.3.26"
+icechat = { path = "../" }
+log = "0.4.17"
+rfd = "0.11.0"
+tokio = "1.25"
+uuid = "1.3.0"

@@ -1,8 +1,10 @@
+pub mod chat;
+
+use chat::Chat;
 use eframe::egui;
 use egui_dock::Tree;
 use icechat::{
     channel::Ed25519Cert,
-    chat::Chat,
     database::{Contact, Content, Conversation},
     notification::NotificationManager,
     poll_runtime::PollRuntime,
@@ -15,7 +17,7 @@ fn main() {
 
     let path = std::env::args().nth(1).unwrap_or_else(|| {
         let path = FileDialog::new()
-            .add_filter("Icechat Database", &[".sqlite3"])
+            .add_filter("Icechat Database", &["sqlite3"])
             .save_file();
 
         let Some(path) = path else { std::process::exit(0); };

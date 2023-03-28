@@ -11,7 +11,7 @@ use icepipe::{
     pipe_stream::StreamError,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
-use std::ops::Deref;
+use std::{ops::Deref, str::FromStr};
 
 pub struct Channel<S: DbSync> {
     channel: ChannelData,
@@ -246,6 +246,26 @@ impl Ed25519Cert {
             .collect::<String>()
     }
 }
+impl FromStr for Ed25519Cert {
+    type Err = BadEd25519CertStr;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() != 64 {
+            return Err(BadEd25519CertStr);
+        }
+
+        let mut r = [0; 32];
+        for i in 0..32 {
+            let hex = &s[i * 2..][..2];
+            r[i] = u8::from_str_radix(hex, 16).map_err(|_| BadEd25519CertStr)?;
+        }
+
+        Ok(Ed25519Cert(r))
+    }
+}
+#[derive(thiserror::Error, Debug)]
+#[error("String is not a valid Ed25519 cert")]
+pub struct BadEd25519CertStr;
 
 pub enum ChannelState<S: DbSync> {
     Offline,
