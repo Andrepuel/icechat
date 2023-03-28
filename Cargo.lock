@@ -1903,9 +1903,9 @@ dependencies = [
 
 [[package]]
 name = "icepipe"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c785cc86b45fe1597c9d68cdab4a232b662ba1869e08e7bd5ed9dee4e5594bf"
+checksum = "b5bf81359bb54f96c2f654c5b945211662eab7dd2f2f0efa399b665e3f9150a6"
 dependencies = [
  "base64 0.21.0",
  "bytes",
